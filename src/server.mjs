@@ -760,7 +760,13 @@ function emitEvent(event) {
 
   const data = `id: ${enriched.seq}\nevent: ${enriched.type}\ndata: ${JSON.stringify(enriched)}\n\n`;
   for (const client of sseClients) {
-    client.write(data);
+    try {
+      if (!client.destroyed) {
+        client.write(data);
+      }
+    } catch {
+      sseClients.delete(client);
+    }
   }
 }
 
@@ -833,6 +839,7 @@ async function serveFile(response, filePath) {
 }
 
 const server = http.createServer(async (request, response) => {
+  response.on('error', () => {});
   const reqUrl = new URL(request.url, `http://${request.headers.host ?? `${HOST}:${PORT}`}`);
   const pathname = reqUrl.pathname;
 
@@ -977,15 +984,28 @@ const server = http.createServer(async (request, response) => {
       ? eventHistory.filter((event) => event.seq > lastEventId).slice(-200)
       : eventHistory.slice(-25);
 
+    sseClients.add(response);
+    response.on('error', () => {
+      sseClients.delete(response);
+    });
+
     for (const event of replayEvents) {
       response.write(`id: ${event.seq}\n`);
       response.write(`event: ${event.type}\n`);
       response.write(`data: ${JSON.stringify(event)}\n\n`);
     }
-
-    sseClients.add(response);
     const heartbeat = setInterval(() => {
-      response.write(': heartbeat\n\n');
+      try {
+        if (!response.destroyed) {
+          response.write(': heartbeat\n\n');
+        } else {
+          clearInterval(heartbeat);
+          sseClients.delete(response);
+        }
+      } catch {
+        clearInterval(heartbeat);
+        sseClients.delete(response);
+      }
     }, 15000);
 
     request.on('close', () => {
@@ -1070,7 +1090,13 @@ const server = http.createServer(async (request, response) => {
 
   if (request.method === 'POST' && pathname === '/stop') {
     if (activePipeline?.isRunning()) {
-      activePipeline.stop('user_requested_stop');
+      try {
+        activePipeline.stop('user_requested_stop');
+      } catch (error) {
+        // eslint-disable-next-line no-console
+        console.error(`[stop] pipeline.stop() error: ${error.message}`);
+        activePipeline = null;
+      }
     }
 
     sendJson(response, 200, {
@@ -1466,6 +1492,22 @@ const server = http.createServer(async (request, response) => {
   }
 
   sendJson(response, 404, { ok: false, error: 'Not found' });
+});
+
+process.on('uncaughtException', (error) => {
+  // eslint-disable-next-line no-console
+  console.error(`[uncaughtException] ${error.stack ?? error.message}`);
+});
+
+process.on('unhandledRejection', (reason) => {
+  // eslint-disable-next-line no-console
+  console.error(`[unhandledRejection] ${reason?.stack ?? reason}`);
+});
+
+server.on('clientError', (error, socket) => {
+  if (!socket.destroyed) {
+    socket.end('HTTP/1.1 400 Bad Request\r\n\r\n');
+  }
 });
 
 async function hydrateStateFromStore() {

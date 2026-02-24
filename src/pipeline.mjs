@@ -753,6 +753,14 @@ export function createPipeline(options) {
 
     nextYtdlpProc.stdout.pipe(nextFfmpegProc.stdin);
 
+    // Absorb EPIPE / read errors on subprocess stdio during teardown.
+    // Retry/stop decisions are handled by 'close' and process-level 'error' handlers.
+    nextFfmpegProc.stdin.on('error', () => {});   // EPIPE when ffmpeg killed
+    nextYtdlpProc.stdout.on('error', () => {});   // read error when yt-dlp killed
+    nextFfmpegProc.stdout.on('error', () => {});  // read error when ffmpeg killed
+    nextYtdlpProc.stderr.on('error', () => {});   // read error when yt-dlp killed
+    nextFfmpegProc.stderr.on('error', () => {});  // read error when ffmpeg killed
+
     nextYtdlpProc.stderr.on('data', (chunk) => {
       if (!isCurrentAttempt(attempt)) {
         return;
@@ -1036,6 +1044,9 @@ export function createPipeline(options) {
       void (async () => {
         try {
           await researchClaim(next);
+        } catch {
+          // researchClaim handles its own errors; this catch prevents
+          // unhandled rejection if emit() throws during error-path broadcasting
         } finally {
           researchInFlight = Math.max(0, researchInFlight - 1);
           if (running && researchQueue.length > 0) {
