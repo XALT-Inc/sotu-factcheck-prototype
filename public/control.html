@@ -1,0 +1,1641 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>XALT Factchecker Prototype</title>
+    <style>
+      :root {
+        --background: 265 22% 8%;
+        --foreground: 0 0% 98%;
+        --card: 265 14% 13%;
+        --card-foreground: 0 0% 98%;
+        --muted: 270 13% 11%;
+        --muted-foreground: 0 0% 70%;
+        --primary: 47 94% 53%;
+        --primary-foreground: 265 22% 8%;
+        --secondary: 265 12% 18%;
+        --secondary-foreground: 0 0% 98%;
+        --accent: 265 12% 20%;
+        --accent-foreground: 0 0% 98%;
+        --border: 265 10% 18%;
+        --input: 265 10% 18%;
+        --ring: 47 94% 53%;
+        --destructive: 0 84.2% 60.2%;
+        --destructive-foreground: 0 0% 98%;
+        --success: 142 76% 36%;
+        --success-foreground: 0 0% 98%;
+        --warning: 38 92% 50%;
+        --warning-foreground: 0 0% 98%;
+        --info: 199 89% 48%;
+        --info-foreground: 0 0% 98%;
+        --radius: 0.6875rem;
+      }
+
+      * { box-sizing: border-box; }
+
+      *::-webkit-scrollbar { width: 8px; height: 8px; }
+      *::-webkit-scrollbar-track { background: hsl(var(--background)); }
+      *::-webkit-scrollbar-thumb {
+        background: linear-gradient(135deg, #d4af37, #ffd700);
+        border-radius: 4px;
+        border: 1px solid hsl(var(--background));
+      }
+      *::-webkit-scrollbar-thumb:hover {
+        background: linear-gradient(135deg, #ffd700, #d4af37);
+      }
+      * { scrollbar-width: thin; scrollbar-color: #d4af37 hsl(var(--background)); }
+
+      html, body {
+        margin: 0;
+        height: 100%;
+        overflow: hidden;
+        font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+        background: hsl(var(--background));
+        color: hsl(var(--foreground));
+      }
+
+      /* ---------- Buttons ---------- */
+      .btn {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        gap: 8px;
+        font-weight: 500;
+        border-radius: var(--radius);
+        border: none;
+        cursor: pointer;
+        transition: background-color 0.15s, opacity 0.15s;
+        font-family: inherit;
+      }
+      .btn-primary { background: hsl(var(--primary)); color: hsl(var(--primary-foreground)); }
+      .btn-primary:hover { opacity: 0.9; }
+      .btn-secondary { background: hsl(var(--secondary)); color: hsl(var(--secondary-foreground)); }
+      .btn-outline { background: transparent; border: 1px solid hsl(var(--border)); color: hsl(var(--foreground)); }
+      .btn-ghost { background: transparent; color: hsl(var(--foreground)); }
+      .btn-ghost:hover { background: hsl(var(--accent)); }
+      .btn-destructive { background: hsl(var(--destructive)); color: hsl(var(--destructive-foreground)); }
+      .btn-success { background: hsl(var(--success)); color: hsl(var(--success-foreground)); }
+      .btn-sm { height: 32px; padding: 0 12px; font-size: 0.8125rem; }
+      .btn-md { height: 40px; padding: 0 16px; font-size: 0.875rem; }
+      .btn-lg { height: 48px; padding: 0 24px; font-size: 0.875rem; }
+      .btn:disabled { opacity: 0.5; cursor: not-allowed; pointer-events: none; }
+
+      /* ---------- Badges ---------- */
+      .badge {
+        display: inline-flex;
+        align-items: center;
+        gap: 4px;
+        padding: 2px 8px;
+        border-radius: 999px;
+        font-size: 0.6875rem;
+        font-weight: 600;
+        text-transform: uppercase;
+        letter-spacing: 0.05em;
+      }
+      .badge-success { background: hsl(var(--success) / 0.15); color: hsl(142 76% 70%); }
+      .badge-destructive { background: hsl(var(--destructive) / 0.15); color: hsl(0 84% 75%); }
+      .badge-warning { background: hsl(var(--warning) / 0.15); color: hsl(38 92% 70%); }
+      .badge-info { background: hsl(var(--info) / 0.15); color: hsl(199 89% 70%); }
+      .badge-muted { background: hsl(var(--accent)); color: hsl(var(--muted-foreground)); }
+      .badge-primary { background: hsl(var(--primary) / 0.15); color: hsl(var(--primary)); }
+
+      /* ---------- Cards ---------- */
+      .card { background: hsl(var(--card)); border: 1px solid hsl(var(--border)); border-radius: var(--radius); }
+      .card-sm { padding: 12px; }
+      .card-md { padding: 16px; }
+      .card-lg { padding: 20px; }
+
+      /* ---------- Inputs ---------- */
+      .input {
+        width: 100%;
+        height: 40px;
+        padding: 8px 12px;
+        background: transparent;
+        border: 1px solid hsl(var(--input));
+        border-radius: var(--radius);
+        color: hsl(var(--foreground));
+        font-size: 0.875rem;
+        font-family: inherit;
+        outline: none;
+        transition: border-color 0.2s;
+      }
+      .input:focus { border-color: hsl(var(--ring)); }
+
+      /* ---------- Status Pill ---------- */
+      .status-pill {
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+        padding: 4px 12px;
+        border-radius: 999px;
+        font-size: 0.75rem;
+        font-weight: 600;
+        text-transform: uppercase;
+        letter-spacing: 0.05em;
+      }
+      .status-pill .dot { width: 8px; height: 8px; border-radius: 50%; }
+      .status-pill.running .dot { background: hsl(var(--success)); animation: pulse 2s infinite; }
+      .status-pill.stopped .dot { background: hsl(var(--warning)); }
+      @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.4; } }
+
+      /* ---------- Tabs ---------- */
+      .tab-bar { display: flex; border-bottom: 1px solid hsl(var(--border)); }
+      .tab {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        flex: 1;
+        padding: 10px 16px;
+        font-size: 0.8125rem;
+        font-weight: 500;
+        color: hsl(var(--muted-foreground));
+        background: none;
+        border: none;
+        border-bottom: 2px solid transparent;
+        cursor: pointer;
+        transition: color 0.15s, border-color 0.15s;
+        font-family: inherit;
+        text-decoration: none;
+      }
+      .tab svg { width: 24px; height: 24px; flex-shrink: 0; }
+      .tab:hover { color: hsl(var(--foreground)); }
+      .tab.active { color: hsl(var(--primary)); border-bottom-color: hsl(var(--primary)); }
+
+      /* ---------- Toast ---------- */
+      .toast-container {
+        position: fixed;
+        top: 16px;
+        right: 16px;
+        z-index: 9999;
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+        pointer-events: none;
+      }
+      .toast {
+        pointer-events: auto;
+        padding: 12px 16px;
+        border-radius: var(--radius);
+        font-size: 0.8125rem;
+        font-weight: 500;
+        box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+        animation: toastIn 200ms ease-out forwards;
+      }
+      .toast-success { background: hsl(var(--success)); color: #fff; }
+      .toast-error { background: hsl(var(--destructive)); color: #fff; }
+      .toast-warning { background: hsl(var(--warning)); color: #000; }
+      .toast-info { background: hsl(var(--info)); color: #fff; }
+      @keyframes toastIn { from { transform: translateX(100%); opacity: 0; } to { transform: translateX(0); opacity: 1; } }
+      @keyframes toastOut { from { transform: translateX(0); opacity: 1; } to { transform: translateX(100%); opacity: 0; } }
+
+      /* ---------- Login Gate ---------- */
+      .login-gate { position: fixed; inset: 0; z-index: 1000; display: flex; }
+      .login-background { width: 46.35%; min-height: 100vh; background: url('/login-bg-copy.png') center/cover no-repeat; }
+      .login-content {
+        flex: 1;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        padding: 2rem;
+        background: hsl(var(--background));
+      }
+      .login-form-container { width: 379px; display: flex; flex-direction: column; align-items: center; }
+      .login-logo { width: 280px; margin-bottom: 1.5rem; }
+      .login-title { display: none; }
+      .password-dots {
+        margin-bottom: 2rem;
+        font-size: 0.875rem;
+        font-weight: 500;
+        letter-spacing: 0.05em;
+        color: #CAC4D0;
+      }
+      .login-form { width: 100%; display: flex; flex-direction: column; gap: 1rem; }
+      .input-group { position: relative; width: 100%; }
+      .input-label {
+        position: absolute;
+        top: -8px;
+        left: 12px;
+        padding: 0 4px;
+        background: hsl(var(--background));
+        font-size: 12px;
+        color: #CAC4D0;
+        z-index: 1;
+      }
+      .input-field {
+        width: 100%;
+        height: 56px;
+        padding: 8px 16px;
+        background: transparent;
+        border: 1px solid #938F99;
+        border-radius: 4px;
+        font-size: 16px;
+        color: #E6E0E9;
+        outline: none;
+        transition: border-color 0.2s;
+        font-family: inherit;
+      }
+      .input-field:focus { border-color: #F9CF14; }
+      .login-button {
+        width: 100%;
+        height: 40px;
+        margin-top: 0.5rem;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        gap: 8px;
+        background: #F9CF14;
+        border: none;
+        border-radius: 100px;
+        box-shadow: 0px 6px 10px 4px rgba(0,0,0,0.15), 0px 2px 3px rgba(0,0,0,0.3);
+        font-weight: 500;
+        font-size: 14px;
+        color: #000;
+        cursor: pointer;
+        transition: background-color 0.2s;
+        font-family: inherit;
+      }
+      .login-button:hover:not(:disabled) { background: #E5BD12; }
+      .login-button:disabled { opacity: 0.7; cursor: not-allowed; }
+      .login-error {
+        padding: 12px 16px;
+        background: rgba(220,38,38,0.1);
+        border: 1px solid rgba(220,38,38,0.3);
+        border-radius: 4px;
+        color: #FCA5A5;
+        font-size: 14px;
+      }
+      .login-spinner {
+        width: 18px;
+        height: 18px;
+        border: 2px solid rgba(0,0,0,0.2);
+        border-top-color: #000;
+        border-radius: 50%;
+        animation: spin 0.6s linear infinite;
+        display: inline-block;
+      }
+      @keyframes spin { to { transform: rotate(360deg); } }
+      @keyframes shake { 0%,100% { transform: translateX(0); } 25% { transform: translateX(-6px); } 75% { transform: translateX(6px); } }
+
+      /* ---------- Page Layout ---------- */
+      .page { display: flex; flex-direction: column; height: 100vh; }
+      .page-header {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        height: 56px;
+        padding: 0 16px;
+        border-bottom: 1px solid hsl(var(--border));
+        background: hsl(var(--card));
+        flex-shrink: 0;
+      }
+      .page-header-left, .page-header-center, .page-header-right {
+        display: flex;
+        align-items: center;
+      }
+      .page-title { font-size: 1.25rem; font-weight: 700; margin: 0; }
+      .page-body { display: flex; flex: 1; overflow: hidden; }
+      .main-panel { flex: 1; overflow-y: auto; padding: 16px; display: flex; flex-direction: column; gap: 16px; }
+      .side-panel {
+        width: 400px;
+        border-left: 1px solid hsl(var(--border));
+        background: hsl(var(--muted));
+        display: flex;
+        flex-direction: column;
+        flex-shrink: 0;
+      }
+      .tab-content { flex: 1; overflow-y: auto; padding: 12px; }
+      .control-strip { display: flex; gap: 8px; align-items: center; }
+      .control-strip .input { flex: 1; }
+
+      /* ---------- Section Header ---------- */
+      .section-header { display: flex; align-items: center; justify-content: space-between; }
+      .section-title {
+        font-size: 0.6875rem;
+        font-weight: 600;
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+        color: hsl(var(--muted-foreground));
+        margin: 0;
+      }
+
+      /* ---------- Claims Cards ---------- */
+      .claims-list { display: flex; flex-direction: column; gap: 8px; margin-top: 8px; }
+      .claim-card { transition: box-shadow 0.15s; }
+      .claim-card:hover { box-shadow: 0 0 0 1px hsl(var(--border)); }
+      .claim-card-header { display: flex; align-items: center; gap: 12px; cursor: pointer; }
+      .claim-card-left { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
+      .verdict-dot { width: 8px; height: 8px; border-radius: 50%; }
+      .verdict-dot.researching {
+        background: hsl(var(--info)) !important;
+        animation: pulse 1.5s ease-in-out infinite;
+      }
+      .claim-card-right .badge.badge-researching {
+        background: hsl(var(--info) / 0.15);
+        color: hsl(199 89% 70%);
+        gap: 5px;
+      }
+      .research-spinner {
+        width: 10px;
+        height: 10px;
+        border: 1.5px solid hsl(199 89% 70% / 0.3);
+        border-top-color: hsl(199 89% 70%);
+        border-radius: 50%;
+        animation: spin 0.6s linear infinite;
+        display: inline-block;
+        vertical-align: middle;
+      }
+      .claim-time { font-size: 0.75rem; font-variant-numeric: tabular-nums; color: hsl(var(--muted-foreground)); }
+      .claim-card-center { flex: 1; min-width: 0; }
+      .claim-text {
+        margin: 0;
+        font-size: 0.875rem;
+        line-height: 1.4;
+        display: -webkit-box;
+        -webkit-line-clamp: 2;
+        -webkit-box-orient: vertical;
+        overflow: hidden;
+      }
+      .claim-card-right { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
+      .claim-card-details { margin-top: 12px; padding-top: 12px; border-top: 1px solid hsl(var(--border)); }
+      .claim-details-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px 24px; }
+      .detail-row { display: flex; justify-content: space-between; padding: 4px 0; }
+      .detail-label { font-size: 0.75rem; color: hsl(var(--muted-foreground)); text-transform: uppercase; letter-spacing: 0.05em; }
+      .detail-value { font-size: 0.8125rem; }
+      .claim-actions { display: flex; gap: 8px; margin-top: 12px; flex-wrap: wrap; }
+      .expand-btn svg { transition: transform 0.15s; }
+      .claim-card.expanded .expand-btn svg { transform: rotate(180deg); }
+
+      /* ---------- Zero State ---------- */
+      .zero-state {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        padding: 48px 24px;
+        text-align: center;
+        color: hsl(var(--muted-foreground));
+      }
+      .zero-state svg { width: 32px; height: 32px; opacity: 0.4; margin-bottom: 12px; }
+      .zero-state p { margin: 0; font-size: 0.875rem; font-weight: 600; }
+      .zero-state .zero-sub { font-size: 0.75rem; font-weight: 400; margin-top: 4px; opacity: 0.7; }
+
+      /* ---------- Feed Items ---------- */
+      .feed-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
+      .feed-item {
+        padding: 10px 12px;
+        background: hsl(var(--background));
+        border: 1px solid hsl(var(--border));
+        border-radius: var(--radius);
+        font-size: 0.8125rem;
+        line-height: 1.4;
+      }
+      .feed-item .meta { font-size: 0.6875rem; color: hsl(var(--muted-foreground)); margin-top: 4px; }
+
+      /* ---------- System Info ---------- */
+      .system-info { display: flex; flex-direction: column; gap: 8px; }
+      .system-row {
+        display: flex;
+        justify-content: space-between;
+        padding: 8px 12px;
+        background: hsl(var(--background));
+        border: 1px solid hsl(var(--border));
+        border-radius: var(--radius);
+        font-size: 0.8125rem;
+      }
+      .system-row .label { color: hsl(var(--muted-foreground)); }
+
+      /* ---------- Verdict Banner ---------- */
+      .verdict-banner {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        padding: 10px 16px;
+        border-radius: var(--radius);
+        font-weight: 700;
+        font-size: 0.875rem;
+        text-transform: uppercase;
+        letter-spacing: 0.06em;
+      }
+      .verdict-banner .verdict-confidence {
+        margin-left: auto;
+        font-size: 0.8125rem;
+        font-weight: 500;
+        opacity: 0.85;
+      }
+      .verdict-true { background: hsl(var(--success) / 0.18); color: hsl(142 76% 70%); }
+      .verdict-false { background: hsl(var(--destructive) / 0.18); color: hsl(0 84% 75%); }
+      .verdict-misleading { background: hsl(var(--warning) / 0.18); color: hsl(38 92% 70%); }
+      .verdict-unverified { background: hsl(var(--accent)); color: hsl(var(--muted-foreground)); }
+
+      /* ---------- Claim Comparison ---------- */
+      .claim-comparison {
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+        margin-top: 12px;
+        padding: 12px;
+        background: hsl(var(--muted));
+        border-radius: var(--radius);
+      }
+      .comparison-row {
+        display: flex;
+        gap: 10px;
+        align-items: flex-start;
+      }
+      .comparison-label {
+        flex-shrink: 0;
+        font-size: 0.6875rem;
+        font-weight: 700;
+        text-transform: uppercase;
+        letter-spacing: 0.05em;
+        padding: 2px 6px;
+        border-radius: 4px;
+        min-width: 70px;
+        text-align: center;
+      }
+      .comparison-label.claimed { background: hsl(var(--destructive) / 0.15); color: hsl(0 84% 75%); }
+      .comparison-label.actual { background: hsl(var(--success) / 0.15); color: hsl(142 76% 70%); }
+      .comparison-text {
+        font-size: 0.8125rem;
+        line-height: 1.5;
+        color: hsl(var(--foreground));
+      }
+
+      /* ---------- AI Summary ---------- */
+      .ai-summary {
+        margin-top: 12px;
+        padding: 12px;
+        background: hsl(var(--muted));
+        border-radius: var(--radius);
+      }
+      .ai-summary-label {
+        font-size: 0.6875rem;
+        font-weight: 600;
+        text-transform: uppercase;
+        letter-spacing: 0.05em;
+        color: hsl(var(--muted-foreground));
+        margin-bottom: 4px;
+      }
+      .ai-summary-text {
+        font-size: 0.8125rem;
+        line-height: 1.5;
+        color: hsl(var(--foreground));
+      }
+
+      /* ---------- Evidence Details ---------- */
+      .evidence-details {
+        margin-top: 12px;
+      }
+      .evidence-details summary {
+        cursor: pointer;
+        font-size: 0.75rem;
+        font-weight: 600;
+        text-transform: uppercase;
+        letter-spacing: 0.05em;
+        color: hsl(var(--muted-foreground));
+        padding: 8px 0;
+      }
+      .evidence-details[open] summary {
+        margin-bottom: 8px;
+      }
+      .evidence-inner {
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+      }
+      .evidence-section {
+        padding: 10px 12px;
+        background: hsl(var(--background));
+        border: 1px solid hsl(var(--border));
+        border-radius: var(--radius);
+        font-size: 0.8125rem;
+      }
+      .evidence-section-title {
+        font-size: 0.6875rem;
+        font-weight: 600;
+        text-transform: uppercase;
+        letter-spacing: 0.05em;
+        color: hsl(var(--muted-foreground));
+        margin-bottom: 4px;
+      }
+
+      /* ---------- Responsive ---------- */
+      @media (max-width: 1024px) {
+        .login-background { display: none; }
+      }
+      @media (max-width: 980px) {
+        .page-body { flex-direction: column; }
+        .side-panel {
+          width: 100%;
+          height: 300px;
+          border-left: none;
+          border-top: 1px solid hsl(var(--border));
+        }
+      }
+    </style>
+  </head>
+  <body>
+
+    <!-- Login Gate -->
+    <div class="login-gate" id="login-gate">
+      <div class="login-background"></div>
+      <div class="login-content">
+        <div class="login-form-container">
+          <img class="login-logo" src="/xalt-long-logo.png" alt="XALT" />
+          <div class="password-dots">Factchecker Prototype</div>
+          <form class="login-form" id="login-form">
+            <div id="login-error" class="login-error" style="display:none"></div>
+            <div class="input-group">
+              <label class="input-label" for="gate-password">Password</label>
+              <input class="input-field" id="gate-password" type="password" autocomplete="current-password" />
+            </div>
+            <button type="submit" class="login-button" id="login-btn">
+              <span>Log in</span>
+            </button>
+          </form>
+        </div>
+      </div>
+    </div>
+
+    <!-- Main Page -->
+    <div class="page" id="page" style="display:none">
+      <header class="page-header">
+        <div class="page-header-left" style="gap:10px;">
+          <img src="/xalt-long-logo.png" alt="XALT" style="height:24px;" />
+          <h1 class="page-title">Factchecker</h1>
+        </div>
+        <div class="page-header-right"></div>
+      </header>
+      <div class="page-body">
+        <main class="main-panel">
+          <!-- Control Strip -->
+          <div class="control-strip card card-sm">
+            <input class="input" id="youtube-url" type="url" placeholder="https://www.youtube.com/watch?v=..." />
+            <button class="btn btn-primary btn-sm" id="start-btn" title="Start"><svg width="16" height="16" viewBox="0 0 20 20" fill="currentColor"><path d="M6.3 2.841A1.5 1.5 0 004 4.11V15.89a1.5 1.5 0 002.3 1.269l9.344-5.89a1.5 1.5 0 000-2.538L6.3 2.84z"/></svg></button>
+            <button class="btn btn-secondary btn-sm" id="stop-btn" title="Stop"><svg width="16" height="16" viewBox="0 0 20 20" fill="currentColor"><path d="M5.25 3A2.25 2.25 0 003 5.25v9.5A2.25 2.25 0 005.25 17h9.5A2.25 2.25 0 0017 14.75v-9.5A2.25 2.25 0 0014.75 3h-9.5z"/></svg></button>
+            <div class="status-pill stopped" id="status">
+              <span class="dot"></span>
+              <span class="status-text">Stopped</span>
+            </div>
+          </div>
+          <!-- Claims Queue -->
+          <section class="claims-section">
+            <div class="section-header">
+              <h2 class="section-title">Claims Queue</h2>
+              <span class="badge badge-muted" id="claims-count">0 claims</span>
+            </div>
+            <div class="claims-list" id="claims-list"></div>
+          </section>
+        </main>
+        <aside class="side-panel">
+          <div class="tab-bar">
+            <button class="tab active" data-tab="transcript" title="Transcript">
+              <svg width="20" height="20" viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M10 2C7.76407 2 5.56943 2.17905 3.42976 2.52374C1.99339 2.75513 1 4.01325 1 5.42588V10.5741C1 11.9867 1.99338 13.2449 3.42976 13.4763C4.59764 13.6644 5.78193 13.8032 6.9804 13.8905C7.2601 13.9108 7.5012 14.0703 7.62247 14.3035L9.33459 17.596C9.46367 17.8443 9.7202 18 10 18C10.2798 18 10.5363 17.8443 10.6654 17.596L12.3775 14.3035C12.4988 14.0703 12.7399 13.9108 13.0196 13.8905C14.2181 13.8032 15.4024 13.6644 16.5702 13.4763C18.0066 13.2449 19 11.9867 19 10.5741V5.42588C19 4.01325 18.0066 2.75513 16.5702 2.52374C14.4306 2.17905 12.2359 2 10 2ZM6.75 6C6.33579 6 6 6.33579 6 6.75C6 7.16421 6.33579 7.5 6.75 7.5H13.25C13.6642 7.5 14 7.16421 14 6.75C14 6.33579 13.6642 6 13.25 6H6.75ZM6.75 8.5C6.33579 8.5 6 8.83579 6 9.25C6 9.66421 6.33579 10 6.75 10H10.25C10.6642 10 11 9.66421 11 9.25C11 8.83579 10.6642 8.5 10.25 8.5H6.75Z" clip-rule="evenodd"/></svg>
+            </button>
+            <button class="tab" data-tab="logs" title="Logs">
+              <svg width="20" height="20" viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M3.25 3C2.00736 3 1 4.00736 1 5.25V14.75C1 15.9926 2.00736 17 3.25 17H16.75C17.9926 17 19 15.9926 19 14.75V5.25C19 4.00736 17.9926 3 16.75 3H3.25ZM4.19253 11.7517C3.91544 11.4438 3.94039 10.9696 4.24828 10.6925L6.12886 9L4.24828 7.30747C3.94039 7.03038 3.91543 6.55616 4.19253 6.24828C4.46962 5.94039 4.94384 5.91544 5.25172 6.19253L7.75172 8.44253C7.90976 8.58476 8 8.78738 8 9C8 9.21261 7.90976 9.41524 7.75172 9.55747L5.25172 11.8075C4.94384 12.0846 4.46962 12.0596 4.19253 11.7517ZM9.75 10.25C9.33579 10.25 9 10.5858 9 11C9 11.4142 9.33579 11.75 9.75 11.75H12.25C12.6642 11.75 13 11.4142 13 11C13 10.5858 12.6642 10.25 12.25 10.25H9.75Z" clip-rule="evenodd"/></svg>
+            </button>
+            <button class="tab" data-tab="settings" title="Settings">
+              <svg width="20" height="20" viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M7.83922 1.80388C7.93271 1.33646 8.34312 1 8.81981 1H11.1802C11.6569 1 12.0673 1.33646 12.1608 1.80388L12.4913 3.45629C13.1956 3.72458 13.8454 4.10332 14.4196 4.57133L16.0179 4.03065C16.4694 3.8779 16.966 4.06509 17.2043 4.47791L18.3845 6.52207C18.6229 6.93489 18.5367 7.45855 18.1786 7.77322L16.9119 8.88645C16.9699 9.24909 17 9.62103 17 10C17 10.379 16.9699 10.7509 16.9119 11.1135L18.1786 12.2268C18.5367 12.5414 18.6229 13.0651 18.3845 13.4779L17.2043 15.5221C16.966 15.9349 16.4694 16.1221 16.0179 15.9693L14.4196 15.4287C13.8454 15.8967 13.1956 16.2754 12.4913 16.5437L12.1608 18.1961C12.0673 18.6635 11.6569 19 11.1802 19H8.81981C8.34312 19 7.93271 18.6635 7.83922 18.1961L7.50874 16.5437C6.80443 16.2754 6.1546 15.8967 5.58043 15.4287L3.98214 15.9694C3.5306 16.1221 3.03401 15.9349 2.79567 15.5221L1.61547 13.4779C1.37713 13.0651 1.4633 12.5415 1.82136 12.2268L3.08808 11.1135C3.03012 10.7509 3 10.379 3 10C3 9.62103 3.03012 9.2491 3.08808 8.88647L1.82136 7.77324C1.46331 7.45857 1.37713 6.93491 1.61547 6.52209L2.79567 4.47793C3.03401 4.06511 3.5306 3.87791 3.98214 4.03066L5.58042 4.57134C6.15459 4.10332 6.80442 3.72459 7.50874 3.45629L7.83922 1.80388ZM10 13C11.6569 13 13 11.6569 13 10C13 8.34315 11.6569 7 10 7C8.34315 7 7 8.34315 7 10C7 11.6569 8.34315 13 10 13Z" clip-rule="evenodd"/></svg>
+            </button>
+            <a class="tab" id="overlay-launch-link" href="/overlay" target="_blank" rel="noreferrer" title="Open Overlay">
+              <svg width="24" height="24" viewBox="0 0 20 20" fill="currentColor">
+                <path fill-rule="evenodd" d="M4.25 5.5a.75.75 0 00-.75.75v8.5c0 .414.336.75.75.75h8.5a.75.75 0 00.75-.75v-4a.75.75 0 011.5 0v4A2.25 2.25 0 0112.75 17h-8.5A2.25 2.25 0 012 14.75v-8.5A2.25 2.25 0 014.25 4h5a.75.75 0 010 1.5h-5z" clip-rule="evenodd"/>
+                <path fill-rule="evenodd" d="M6.194 12.753a.75.75 0 001.06.053L16.5 4.44v2.81a.75.75 0 001.5 0v-4.5a.75.75 0 00-.75-.75h-4.5a.75.75 0 000 1.5h2.553l-9.056 8.194a.75.75 0 00-.053 1.06z" clip-rule="evenodd"/>
+              </svg>
+            </a>
+          </div>
+          <div class="tab-content" id="tab-transcript">
+            <div class="zero-state" id="transcript-zero">
+              <svg width="32" height="32" viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M10 2C7.76407 2 5.56943 2.17905 3.42976 2.52374C1.99339 2.75513 1 4.01325 1 5.42588V10.5741C1 11.9867 1.99338 13.2449 3.42976 13.4763C4.59764 13.6644 5.78193 13.8032 6.9804 13.8905C7.2601 13.9108 7.5012 14.0703 7.62247 14.3035L9.33459 17.596C9.46367 17.8443 9.7202 18 10 18C10.2798 18 10.5363 17.8443 10.6654 17.596L12.3775 14.3035C12.4988 14.0703 12.7399 13.9108 13.0196 13.8905C14.2181 13.8032 15.4024 13.6644 16.5702 13.4763C18.0066 13.2449 19 11.9867 19 10.5741V5.42588C19 4.01325 18.0066 2.75513 16.5702 2.52374C14.4306 2.17905 12.2359 2 10 2ZM6.75 6C6.33579 6 6 6.33579 6 6.75C6 7.16421 6.33579 7.5 6.75 7.5H13.25C13.6642 7.5 14 7.16421 14 6.75C14 6.33579 13.6642 6 13.25 6H6.75ZM6.75 8.5C6.33579 8.5 6 8.83579 6 9.25C6 9.66421 6.33579 10 6.75 10H10.25C10.6642 10 11 9.66421 11 9.25C11 8.83579 10.6642 8.5 10.25 8.5H6.75Z" clip-rule="evenodd"/></svg>
+              <p>No transcript yet</p>
+              <p class="zero-sub">Segments will appear here once a pipeline is running.</p>
+            </div>
+            <ul class="feed-list" id="transcript-list"></ul>
+          </div>
+          <div class="tab-content" id="tab-logs" style="display:none">
+            <div class="zero-state" id="logs-zero">
+              <svg width="32" height="32" viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M3.25 3C2.00736 3 1 4.00736 1 5.25V14.75C1 15.9926 2.00736 17 3.25 17H16.75C17.9926 17 19 15.9926 19 14.75V5.25C19 4.00736 17.9926 3 16.75 3H3.25ZM4.19253 11.7517C3.91544 11.4438 3.94039 10.9696 4.24828 10.6925L6.12886 9L4.24828 7.30747C3.94039 7.03038 3.91543 6.55616 4.19253 6.24828C4.46962 5.94039 4.94384 5.91544 5.25172 6.19253L7.75172 8.44253C7.90976 8.58476 8 8.78738 8 9C8 9.21261 7.90976 9.41524 7.75172 9.55747L5.25172 11.8075C4.94384 12.0846 4.46962 12.0596 4.19253 11.7517ZM9.75 10.25C9.33579 10.25 9 10.5858 9 11C9 11.4142 9.33579 11.75 9.75 11.75H12.25C12.6642 11.75 13 11.4142 13 11C13 10.5858 12.6642 10.25 12.25 10.25H9.75Z" clip-rule="evenodd"/></svg>
+              <p>No logs yet</p>
+              <p class="zero-sub">Pipeline events and errors will appear here.</p>
+            </div>
+            <ul class="feed-list" id="log-list"></ul>
+          </div>
+          <div class="tab-content" id="tab-settings" style="display:none">
+            <div class="system-info" id="system-info"></div>
+          </div>
+        </aside>
+      </div>
+    </div>
+    <div class="toast-container" id="toast-container"></div>
+
+    <script>
+      /* ============================================================
+         STATE
+         ============================================================ */
+      const state = {
+        claims: new Map(),
+        running: false,
+        ingestState: 'stopped',
+        actionBusy: new Set(),
+        authRequired: false,
+        readAuthRequired: false,
+        eventSource: null
+      };
+
+      const expandedClaims = new Set();
+
+      /* ============================================================
+         DOM REFS
+         ============================================================ */
+      const transcriptList = document.getElementById('transcript-list');
+      const logList = document.getElementById('log-list');
+      const claimsList = document.getElementById('claims-list');
+      const youtubeInput = document.getElementById('youtube-url');
+      const overlayLaunchLink = document.getElementById('overlay-launch-link');
+
+      /* ============================================================
+         UTILITIES
+         ============================================================ */
+      function escapeHtml(input) {
+        return String(input ?? '')
+          .replace(/&/g, '&amp;')
+          .replace(/</g, '&lt;')
+          .replace(/>/g, '&gt;')
+          .replace(/"/g, '&quot;')
+          .replace(/'/g, '&#39;');
+      }
+
+      function humanize(str) {
+        return String(str ?? '')
+          .replace(/_/g, ' ')
+          .replace(/\b\w/g, c => c.toUpperCase()) || '-';
+      }
+
+      function evidenceStatusBadge(value) {
+        const h = humanize(value);
+        const v = (value || '').toLowerCase();
+        if (['researched','supported','ready'].includes(v)) return `<span class="badge badge-success">${escapeHtml(h)}</span>`;
+        if (['researching','queued','rendering'].includes(v)) return `<span class="badge badge-warning">${escapeHtml(h)}</span>`;
+        if (['needs_manual_research','disputed','failed'].includes(v)) return `<span class="badge badge-destructive">${escapeHtml(h)}</span>`;
+        return `<span class="badge badge-muted">${escapeHtml(h)}</span>`;
+      }
+
+      function showToast(message, type = 'info', duration = 4000) {
+        const container = document.getElementById('toast-container');
+        const toast = document.createElement('div');
+        toast.className = `toast toast-${type}`;
+        toast.textContent = message;
+        container.appendChild(toast);
+
+        setTimeout(() => {
+          toast.style.animation = 'toastOut 200ms ease-in forwards';
+          toast.addEventListener('animationend', () => toast.remove());
+        }, duration);
+      }
+
+      /* ============================================================
+         STATUS
+         ============================================================ */
+      function setStatus(text, running) {
+        state.running = Boolean(running);
+        const el = document.getElementById('status');
+        el.className = `status-pill ${running ? 'running' : 'stopped'}`;
+        el.querySelector('.status-text').textContent = text;
+      }
+
+      function runningStatusText(chunkSeconds = null) {
+        if (state.ingestState === 'reconnecting') {
+          return 'Running (reconnecting ingest...)';
+        }
+        if (chunkSeconds != null) {
+          return `Running (chunk ${chunkSeconds}s)`;
+        }
+        return 'Running';
+      }
+
+      /* ============================================================
+         HELPERS
+         ============================================================ */
+      function eventTimeMs(value) {
+        if (!value) return null;
+        const parsed = Date.parse(value);
+        return Number.isFinite(parsed) ? parsed : null;
+      }
+
+      function verdictBadgeClass(verdict) {
+        const safe = (verdict || 'unverified').toLowerCase();
+        if (safe === 'true' || safe.includes('supported')) return 'badge-success';
+        if (safe.includes('false')) return 'badge-destructive';
+        if (safe.includes('misleading')) return 'badge-warning';
+        return 'badge-muted';
+      }
+
+      function verdictDotColor(verdict) {
+        const safe = (verdict || 'unverified').toLowerCase();
+        if (safe === 'true' || safe.includes('supported')) return 'hsl(var(--success))';
+        if (safe.includes('false')) return 'hsl(var(--destructive))';
+        if (safe.includes('misleading')) return 'hsl(var(--warning))';
+        return 'hsl(var(--muted-foreground))';
+      }
+
+      function approvalBadgeClass(value) {
+        if (value === 'approved') return 'badge-success';
+        if (value === 'rejected') return 'badge-destructive';
+        return 'badge-muted';
+      }
+
+      function approvalText(value) {
+        if (value === 'approved') return 'approved';
+        if (value === 'rejected') return 'rejected';
+        return 'pending';
+      }
+
+      function packageBadgeClass(value) {
+        if (value === 'ready') return 'badge-success';
+        if (value === 'queued' || value === 'rendering') return 'badge-warning';
+        if (value === 'failed') return 'badge-destructive';
+        return 'badge-muted';
+      }
+
+      function policyReasonText(reason) {
+        switch (reason) {
+          case 'still_researching': return 'still researching';
+          case 'not_researched': return 'not researched';
+          case 'provider_degraded': return 'provider degraded';
+          case 'insufficient_sources': return 'insufficient sources';
+          case 'conflicted_sources': return 'conflicting sources';
+          case 'below_threshold': return 'below threshold';
+          case 'rejected_locked': return 'rejected lock';
+          case 'not_approved': return 'not approved';
+          default: return reason || 'none';
+        }
+      }
+
+      /* ============================================================
+         LIST HELPERS
+         ============================================================ */
+      function prependListItem(listEl, html) {
+        const zero = listEl.parentElement.querySelector('.zero-state');
+        if (zero) zero.style.display = 'none';
+        const li = document.createElement('li');
+        li.className = 'feed-item';
+        li.innerHTML = html;
+        listEl.prepend(li);
+        while (listEl.children.length > 30) {
+          listEl.removeChild(listEl.lastChild);
+        }
+      }
+
+      /* ============================================================
+         AUTH
+         ============================================================ */
+      function getControlPassword() {
+        return sessionStorage.getItem('control-password') || '';
+      }
+
+      function buildAuthHeaders(headers = {}) {
+        const merged = { ...headers };
+        const password = getControlPassword();
+        if (password) {
+          merged['x-control-password'] = password;
+        }
+        return merged;
+      }
+
+      function withControlPassword(pathname) {
+        const password = getControlPassword();
+        if (!password || !state.readAuthRequired) {
+          return pathname;
+        }
+        const separator = pathname.includes('?') ? '&' : '?';
+        return `${pathname}${separator}control_password=${encodeURIComponent(password)}`;
+      }
+
+      function updateOverlayLaunchLink() {
+        overlayLaunchLink.href = withControlPassword('/overlay');
+      }
+
+      /* ============================================================
+         LOGIN GATE
+         ============================================================ */
+      function checkAuth() {
+        const pw = sessionStorage.getItem('control-password');
+        if (pw) {
+          document.getElementById('login-gate').style.display = 'none';
+          document.getElementById('page').style.display = 'flex';
+          return true;
+        }
+        document.getElementById('login-gate').style.display = 'flex';
+        document.getElementById('page').style.display = 'none';
+        return false;
+      }
+
+      document.getElementById('login-form').addEventListener('submit', async (e) => {
+        e.preventDefault();
+        const pw = document.getElementById('gate-password').value.trim();
+        const btn = document.getElementById('login-btn');
+        const errorEl = document.getElementById('login-error');
+
+        if (!pw) return;
+
+        btn.disabled = true;
+        btn.innerHTML = '<span class="login-spinner"></span><span>Signing in...</span>';
+        errorEl.style.display = 'none';
+
+        try {
+          const res = await fetch('/health', { headers: { 'x-control-password': pw } });
+          if (res.ok) {
+            sessionStorage.setItem('control-password', pw);
+            document.getElementById('login-gate').style.display = 'none';
+            document.getElementById('page').style.display = 'flex';
+            initApp();
+          } else {
+            errorEl.textContent = 'Invalid password';
+            errorEl.style.display = 'block';
+            document.getElementById('gate-password').style.animation = 'shake 0.3s';
+            setTimeout(() => { document.getElementById('gate-password').style.animation = ''; }, 300);
+          }
+        } catch (err) {
+          errorEl.textContent = 'Connection failed';
+          errorEl.style.display = 'block';
+        } finally {
+          btn.disabled = false;
+          btn.innerHTML = '<span>Log in</span>';
+        }
+      });
+
+      /* ============================================================
+         TAB SWITCHING
+         ============================================================ */
+      document.querySelector('.tab-bar').addEventListener('click', (e) => {
+        const tab = e.target.closest('.tab');
+        if (!tab) return;
+        const target = tab.dataset.tab;
+        if (!target) return;  // overlay link — no tab to switch
+
+        document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+        tab.classList.add('active');
+
+        document.querySelectorAll('.tab-content').forEach(c => c.style.display = 'none');
+        document.getElementById(`tab-${target}`).style.display = 'block';
+      });
+
+      /* ============================================================
+         CLAIMS RENDERING
+         ============================================================ */
+      function toggleClaimExpand(claimId) {
+        if (expandedClaims.has(claimId)) {
+          expandedClaims.delete(claimId);
+        } else {
+          expandedClaims.add(claimId);
+        }
+        renderClaims();
+      }
+
+      function renderClaims() {
+        const rows = [...state.claims.values()].sort((a, b) => (b.updatedAt || '').localeCompare(a.updatedAt || ''));
+        claimsList.innerHTML = '';
+        document.getElementById('claims-count').textContent = `${state.claims.size} claims`;
+
+        for (const row of rows.slice(0, 30)) {
+          const isExpanded = expandedClaims.has(row.claimId);
+          const verdict = (row.verdict || 'unverified').toLowerCase();
+          const approval = row.outputApprovalState || 'pending';
+          const tag = row.claimTypeTag || 'other';
+          const isResearching = row.status === 'pending_research' || row.status === 'researching';
+          const busy = state.actionBusy.has(row.claimId);
+
+          const article = document.createElement('article');
+          article.className = `claim-card card card-sm${isExpanded ? ' expanded' : ''}`;
+          article.dataset.claimId = row.claimId;
+
+          // Build details HTML
+          const googleEvidence = row.googleEvidenceState || 'none';
+          const fredEvidence = row.fredEvidenceState || 'not_applicable';
+          const evidenceStatus = row.evidenceStatus || 'unknown';
+          const sourceCount = Number(row.independentSourceCount ?? 0);
+          const conflict = row.evidenceConflict ? 'Yes' : 'No';
+          const confidence = row.confidence != null ? Math.round(row.confidence * 100) + '%' : '-';
+
+          const pkgStatus = row.outputPackageStatus || 'none';
+          const renderStatus = row.renderStatus || 'none';
+          const eligible = row.approvalEligibility ? 'Yes' : `No (${policyReasonText(row.approvalBlockReason)})`;
+
+          let pkgDetail = evidenceStatusBadge(pkgStatus);
+          if (pkgStatus === 'ready') {
+            const pkgUrl = `/claims/${encodeURIComponent(row.claimId)}/output-package${state.readAuthRequired && getControlPassword() ? `?control_password=${encodeURIComponent(getControlPassword())}` : ''}`;
+            pkgDetail += ` <a style="color:hsl(var(--primary));font-size:0.75rem;" href="${escapeHtml(pkgUrl)}" target="_blank" rel="noreferrer">View JSON</a>`;
+          }
+          if (row.outputPackageError) {
+            pkgDetail += ` <span style="color:hsl(0 84% 75%);font-size:0.75rem;">${escapeHtml(row.outputPackageError)}</span>`;
+          }
+
+          let renderDetail = evidenceStatusBadge(renderStatus);
+          if (renderStatus === 'ready') {
+            if (row.artifactUrl) {
+              renderDetail += ` <a style="color:hsl(var(--primary));font-size:0.75rem;" href="${escapeHtml(row.artifactUrl)}" target="_blank" rel="noreferrer">Open</a>`;
+            }
+            const jobUrl = `/claims/${encodeURIComponent(row.claimId)}/render-job${state.readAuthRequired && getControlPassword() ? `?control_password=${encodeURIComponent(getControlPassword())}` : ''}`;
+            renderDetail += ` <a style="color:hsl(var(--primary));font-size:0.75rem;" href="${escapeHtml(jobUrl)}" target="_blank" rel="noreferrer">Job JSON</a>`;
+          }
+          if (row.renderError) {
+            renderDetail += ` <span style="color:hsl(0 84% 75%);font-size:0.75rem;">${escapeHtml(row.renderError)}</span>`;
+          }
+
+          const policyText = `Threshold: ${escapeHtml(row.policyThreshold ?? '-')} · Eligible: ${escapeHtml(eligible)}`;
+          const summary = escapeHtml(row.summary || '-');
+
+          // Build actions HTML
+          let actionsHtml = '';
+          if (approval === 'rejected') {
+            actionsHtml = '<span style="font-size:0.75rem;color:hsl(var(--muted-foreground));">Rejected (locked)</span>';
+          } else if (approval === 'approved') {
+            const disabled = busy ? 'disabled' : '';
+            actionsHtml = `
+              <button class="btn btn-destructive btn-sm" data-claim-id="${escapeHtml(row.claimId)}" data-action="reject-output" ${disabled}>Reject</button>
+              <button class="btn btn-success btn-sm" data-claim-id="${escapeHtml(row.claimId)}" data-action="generate-package" ${disabled}>Package</button>
+              <button class="btn btn-success btn-sm" data-claim-id="${escapeHtml(row.claimId)}" data-action="render-image" ${disabled}>Render</button>
+            `;
+          } else {
+            const blocked = row.approvalEligibility === false;
+            const approveDisabled = blocked || busy ? 'disabled' : '';
+            const disabled = busy ? 'disabled' : '';
+            actionsHtml = `
+              <button class="btn btn-success btn-sm" data-claim-id="${escapeHtml(row.claimId)}" data-action="approve-output" ${approveDisabled}>Approve</button>
+              <button class="btn btn-destructive btn-sm" data-claim-id="${escapeHtml(row.claimId)}" data-action="reject-output" ${disabled}>Reject</button>
+              <button class="btn btn-outline btn-sm" data-claim-id="${escapeHtml(row.claimId)}" data-action="tag-override" ${disabled}>Retag</button>
+            `;
+          }
+
+          // Determine display verdict: prefer aiVerdict, fall back to raw verdict
+          const displayVerdict = (row.aiVerdict ?? row.verdict ?? 'unverified').toLowerCase();
+          const displayConfidence = row.aiConfidence ?? row.confidence;
+          const displaySummary = (row.aiSummary ?? row.summary ?? '-').slice(0, 484);
+
+          // Map verdict to display label
+          function verdictDisplayLabel(v) {
+            if (v === 'true') return 'CORRECT';
+            if (v === 'false') return 'FALSE';
+            if (v === 'misleading') return 'MISLEADING';
+            if (v.includes('supported')) return 'CORRECT';
+            return 'UNVERIFIED';
+          }
+
+          function verdictBannerClass(v) {
+            if (v === 'true' || v.includes('supported')) return 'verdict-true';
+            if (v === 'false' || v.includes('false')) return 'verdict-false';
+            if (v === 'misleading' || v.includes('misleading')) return 'verdict-misleading';
+            return 'verdict-unverified';
+          }
+
+          const showComparison = row.correctedClaim;
+
+          // Build comparison HTML
+          const comparisonHtml = showComparison ? `
+            <div class="claim-comparison">
+              <div class="comparison-row">
+                <span class="comparison-label claimed">CLAIMED:</span>
+                <span class="comparison-text">${escapeHtml((row.claim || '').slice(0, 484))}</span>
+              </div>
+              <div class="comparison-row">
+                <span class="comparison-label actual">ACTUAL:</span>
+                <span class="comparison-text">${escapeHtml(row.correctedClaim.slice(0, 484))}</span>
+              </div>
+            </div>
+          ` : '';
+
+          // Build AI summary HTML
+          const aiSummaryHtml = `
+            <div class="ai-summary">
+              <div class="ai-summary-label">AI Summary${row.evidenceBasis ? ` <span class="badge badge-muted" style="margin-left:6px;font-size:0.625rem;">${escapeHtml(row.evidenceBasis)}</span>` : ''}</div>
+              <div class="ai-summary-text">${escapeHtml(displaySummary)}</div>
+            </div>
+          `;
+
+          // Build collapsible evidence sources
+          const sourcesListHtml = (row.sources || []).map(s =>
+            `<div style="padding:4px 0;border-bottom:1px solid hsl(var(--border));">
+              <span style="font-weight:600;">${escapeHtml(s.publisher || 'Unknown')}</span>
+              — ${escapeHtml(s.rating || '-')}
+              ${s.url ? ` <a style="color:hsl(var(--primary));font-size:0.75rem;" href="${escapeHtml(s.url)}" target="_blank" rel="noreferrer">Link</a>` : ''}
+            </div>`
+          ).join('');
+
+          const evidenceHtml = `
+            <details class="evidence-details">
+              <summary>Evidence Sources & Details</summary>
+              <div class="evidence-inner">
+                ${row.googleFcVerdict && !(row.googleFcVerdict.toLowerCase() === 'unverified' && (row.googleFcConfidence == null || row.googleFcConfidence < 0.2)) ? `
+                <div class="evidence-section">
+                  <div class="evidence-section-title">Google Fact Check</div>
+                  <div class="detail-row"><span class="detail-label">Verdict</span><span class="detail-value">${escapeHtml(humanize(row.googleFcVerdict))}</span></div>
+                  <div class="detail-row"><span class="detail-label">Confidence</span><span class="detail-value">${row.googleFcConfidence != null ? Math.round(row.googleFcConfidence * 100) + '%' : '-'}</span></div>
+                  ${row.googleFcSummary ? `<div class="detail-row"><span class="detail-label">Summary</span><span class="detail-value">${escapeHtml(row.googleFcSummary)}</span></div>` : ''}
+                </div>
+                ` : ''}
+                ${row.fredEvidenceSummary || (row.fredEvidenceState && row.fredEvidenceState !== 'not_applicable') ? `
+                <div class="evidence-section">
+                  <div class="evidence-section-title">FRED Economic Data</div>
+                  ${row.fredEvidenceState ? `<div class="detail-row"><span class="detail-label">State</span><span class="detail-value">${escapeHtml(humanize(row.fredEvidenceState))}</span></div>` : ''}
+                  ${row.fredEvidenceSummary ? `<div class="detail-row"><span class="detail-label">Summary</span><span class="detail-value">${escapeHtml(row.fredEvidenceSummary)}</span></div>` : ''}
+                </div>
+                ` : ''}
+                ${sourcesListHtml ? `
+                <div class="evidence-section">
+                  <div class="evidence-section-title">Sources (${escapeHtml(sourceCount)})</div>
+                  ${sourcesListHtml}
+                </div>
+                ` : ''}
+                <div class="evidence-section">
+                  <div class="evidence-section-title">Research & Policy</div>
+                  <div class="detail-row"><span class="detail-label">Research Status</span><span class="detail-value">${evidenceStatusBadge(row.status)}</span></div>
+                  <div class="detail-row"><span class="detail-label">Google Evidence</span><span class="detail-value">${evidenceStatusBadge(googleEvidence)}</span></div>
+                  <div class="detail-row"><span class="detail-label">FRED Evidence</span><span class="detail-value">${evidenceStatusBadge(fredEvidence)}</span></div>
+                  <div class="detail-row"><span class="detail-label">Confidence</span><span class="detail-value">${escapeHtml(confidence)}</span></div>
+                  <div class="detail-row"><span class="detail-label">Conflict</span><span class="detail-value">${escapeHtml(conflict)}</span></div>
+                  <div class="detail-row"><span class="detail-label">Package</span><span class="detail-value">${pkgDetail}</span></div>
+                  <div class="detail-row"><span class="detail-label">Render</span><span class="detail-value">${renderDetail}</span></div>
+                  <div class="detail-row"><span class="detail-label">Policy</span><span class="detail-value">${policyText}</span></div>
+                </div>
+              </div>
+            </details>
+          `;
+
+          article.innerHTML = `
+            <div class="claim-card-header">
+              <div class="claim-card-left">
+                <span class="verdict-dot${isResearching ? ' researching' : ''}" style="background: ${verdictDotColor(displayVerdict)}"></span>
+                <span class="claim-time">${escapeHtml(row.chunkStartClock || '-')}</span>
+              </div>
+              <div class="claim-card-center">
+                <p class="claim-text">${escapeHtml(row.claim || '')}</p>
+                <span class="badge badge-muted">${escapeHtml(humanize(tag))}</span>
+              </div>
+              <div class="claim-card-right">
+                <span class="badge ${verdictBadgeClass(displayVerdict)}">${escapeHtml(verdictDisplayLabel(displayVerdict))}</span>
+                ${isResearching
+                  ? '<span class="badge badge-researching"><span class="research-spinner"></span>RESEARCHING</span>'
+                  : `<span class="badge ${approvalBadgeClass(approval)}">${escapeHtml(approvalText(approval))}</span>`}
+                <button class="btn btn-ghost btn-sm expand-btn" data-claim-id="${escapeHtml(row.claimId)}" data-action="toggle-expand">
+                  <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M4 6l4 4 4-4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                </button>
+              </div>
+            </div>
+            <div class="claim-card-details" style="display:${isExpanded ? 'block' : 'none'}">
+              <div class="verdict-banner ${verdictBannerClass(displayVerdict)}">
+                ${escapeHtml(verdictDisplayLabel(displayVerdict))}
+                <span class="verdict-confidence">${displayConfidence != null ? escapeHtml(Math.round(displayConfidence * 100)) + '%' : ''}</span>
+              </div>
+              ${comparisonHtml}
+              ${aiSummaryHtml}
+              ${evidenceHtml}
+              <div class="claim-actions">
+                ${actionsHtml}
+              </div>
+            </div>
+          `;
+
+          claimsList.appendChild(article);
+        }
+      }
+
+      /* ============================================================
+         CLAIM STATE MANAGEMENT (preserved exactly)
+         ============================================================ */
+      function upsertClaim(event, forceStatus) {
+        const prev = state.claims.get(event.claimId) || {};
+        const incomingTime = eventTimeMs(event.at);
+        const previousTime = eventTimeMs(prev.updatedAt);
+        if (event.type && incomingTime !== null && previousTime !== null && incomingTime < previousTime) {
+          return;
+        }
+
+        const isRenderLifecycleEvent =
+          event.type === 'claim.render_queued' ||
+          event.type === 'claim.render_ready' ||
+          event.type === 'claim.render_failed';
+        if (
+          isRenderLifecycleEvent &&
+          prev.renderJobId &&
+          event.renderJobId &&
+          prev.renderJobId !== event.renderJobId
+        ) {
+          return;
+        }
+
+        const incomingPackageId = event.outputPackageId ?? event.packageId ?? null;
+        const isPackageLifecycleEvent =
+          event.type === 'claim.output_package_queued' ||
+          event.type === 'claim.output_package_ready' ||
+          event.type === 'claim.output_package_failed';
+        if (
+          isPackageLifecycleEvent &&
+          prev.outputPackageId &&
+          incomingPackageId &&
+          prev.outputPackageId !== incomingPackageId
+        ) {
+          return;
+        }
+
+        const nextOutputPackageStatus = event.outputPackageStatus ?? prev.outputPackageStatus ?? 'none';
+        const nextRenderStatus = event.renderStatus ?? prev.renderStatus ?? 'none';
+        const nextOutputPackageError =
+          event.outputPackageError ??
+          (event.type === 'claim.output_package_failed'
+            ? event.error ?? null
+            : nextOutputPackageStatus === 'queued' || nextOutputPackageStatus === 'ready'
+              ? null
+              : prev.outputPackageError ?? null);
+        const nextRenderError =
+          event.renderError ??
+          (event.type === 'claim.render_failed'
+            ? event.error ?? null
+            : nextRenderStatus === 'queued' || nextRenderStatus === 'rendering' || nextRenderStatus === 'ready'
+              ? null
+              : prev.renderError ?? null);
+
+        state.claims.set(event.claimId, {
+          ...prev,
+          claimId: event.claimId,
+          claim: event.claim ?? prev.claim,
+          claimCategory: event.claimCategory ?? prev.claimCategory,
+          claimTypeTag: event.claimTypeTag ?? prev.claimTypeTag ?? 'other',
+          claimTypeConfidence: event.claimTypeConfidence ?? prev.claimTypeConfidence,
+          status: forceStatus ?? event.status ?? prev.status,
+          verdict: event.verdict ?? prev.verdict,
+          confidence: event.confidence ?? prev.confidence,
+          summary: event.summary ?? prev.summary,
+          sources: event.sources ?? prev.sources,
+          googleEvidenceState: event.googleEvidenceState ?? prev.googleEvidenceState,
+          fredEvidenceState: event.fredEvidenceState ?? prev.fredEvidenceState,
+          fredEvidenceSummary: event.fredEvidenceSummary ?? prev.fredEvidenceSummary,
+          fredEvidenceSources: event.fredEvidenceSources ?? prev.fredEvidenceSources,
+          policyThreshold: event.policyThreshold ?? prev.policyThreshold,
+          independentSourceCount: event.independentSourceCount ?? prev.independentSourceCount,
+          evidenceConflict: event.evidenceConflict ?? prev.evidenceConflict,
+          evidenceStatus: event.evidenceStatus ?? prev.evidenceStatus,
+          approvalEligibility: event.approvalEligibility ?? prev.approvalEligibility,
+          approvalBlockReason: event.approvalBlockReason ?? prev.approvalBlockReason,
+          exportEligibility: event.exportEligibility ?? prev.exportEligibility,
+          exportBlockReason: event.exportBlockReason ?? prev.exportBlockReason,
+          chunkStartClock: event.chunkStartClock ?? prev.chunkStartClock,
+          outputApprovalState: event.outputApprovalState ?? prev.outputApprovalState ?? 'pending',
+          outputPackageStatus: nextOutputPackageStatus,
+          outputPackageId: event.outputPackageId ?? event.packageId ?? prev.outputPackageId ?? null,
+          outputPackageError: nextOutputPackageError,
+          renderStatus: nextRenderStatus,
+          renderJobId: event.renderJobId ?? prev.renderJobId ?? null,
+          artifactUrl: event.artifactUrl ?? prev.artifactUrl ?? null,
+          renderError: nextRenderError,
+          version: event.version ?? prev.version ?? 1,
+          updatedAt: event.at ?? new Date().toISOString(),
+          correctedClaim: event.correctedClaim ?? prev.correctedClaim ?? null,
+          aiSummary: event.aiSummary ?? prev.aiSummary ?? null,
+          aiVerdict: event.aiVerdict ?? prev.aiVerdict ?? null,
+          aiConfidence: event.aiConfidence ?? prev.aiConfidence ?? null,
+          evidenceBasis: event.evidenceBasis ?? prev.evidenceBasis ?? null,
+          googleFcVerdict: event.googleFcVerdict ?? prev.googleFcVerdict ?? null,
+          googleFcConfidence: event.googleFcConfidence ?? prev.googleFcConfidence ?? null,
+          googleFcSummary: event.googleFcSummary ?? prev.googleFcSummary ?? null
+        });
+        renderClaims();
+      }
+
+      /* ============================================================
+         CLAIM ACTIONS
+         ============================================================ */
+      async function callClaimAction(claimId, action, extraPayload = {}) {
+        if (state.actionBusy.has(claimId)) {
+          return;
+        }
+
+        const current = state.claims.get(claimId);
+        state.actionBusy.add(claimId);
+        renderClaims();
+
+        try {
+          const res = await fetch(`/claims/${encodeURIComponent(claimId)}/${action}`, {
+            method: 'POST',
+            headers: buildAuthHeaders({ 'content-type': 'application/json' }),
+            body: JSON.stringify({
+              expectedVersion: current?.version ?? null,
+              ...extraPayload
+            })
+          });
+
+          const body = await res.json().catch(() => ({}));
+          if (!res.ok) {
+            showToast(`Action failed: ${body.error || 'unknown error'}`, 'error');
+            return;
+          }
+
+          if (body.claim) {
+            upsertClaim(body.claim);
+          }
+
+          if (body.package) {
+            upsertClaim({
+              claimId,
+              outputPackageStatus: body.package.status,
+              outputPackageId: body.package.packageId,
+              outputPackageError: body.package.error ?? null,
+              at: body.package.updatedAt ?? new Date().toISOString()
+            });
+          }
+
+          if (body.renderJob) {
+            upsertClaim({
+              claimId,
+              renderStatus: body.renderJob.status,
+              renderJobId: body.renderJob.renderJobId,
+              artifactUrl: body.renderJob.artifactUrl ?? null,
+              renderError: body.renderJob.error ?? null,
+              at: body.renderJob.updatedAt ?? new Date().toISOString()
+            });
+          }
+        } catch (error) {
+          showToast(`Action error: ${error.message}`, 'error');
+        } finally {
+          state.actionBusy.delete(claimId);
+          renderClaims();
+        }
+      }
+
+      /* ============================================================
+         PIPELINE CONTROL
+         ============================================================ */
+      async function startPipeline() {
+        const youtubeUrl = youtubeInput.value.trim();
+        const res = await fetch('/start', {
+          method: 'POST',
+          headers: buildAuthHeaders({ 'content-type': 'application/json' }),
+          body: JSON.stringify({ youtubeUrl })
+        });
+        const body = await res.json().catch(() => ({}));
+        if (!res.ok) {
+          showToast(`Start failed: ${body.error || 'unknown error'}`, 'error');
+          return;
+        }
+        state.ingestState = 'running';
+        setStatus(runningStatusText(), true);
+      }
+
+      async function stopPipeline() {
+        const res = await fetch('/stop', {
+          method: 'POST',
+          headers: buildAuthHeaders()
+        });
+        if (!res.ok) {
+          const body = await res.json().catch(() => ({}));
+          showToast(`Stop failed: ${body.error || 'unknown error'}`, 'error');
+        }
+      }
+
+      document.getElementById('start-btn').addEventListener('click', () => {
+        startPipeline().catch((error) => {
+          showToast(`Error: ${error.message}`, 'error');
+        });
+      });
+
+      document.getElementById('stop-btn').addEventListener('click', () => {
+        stopPipeline().catch((error) => {
+          showToast(`Error: ${error.message}`, 'error');
+        });
+      });
+
+      /* ============================================================
+         CLAIMS LIST EVENT DELEGATION
+         ============================================================ */
+      document.getElementById('claims-list').addEventListener('click', (e) => {
+        const expandBtn = e.target.closest('[data-action="toggle-expand"]');
+        if (expandBtn) {
+          toggleClaimExpand(expandBtn.dataset.claimId);
+          return;
+        }
+
+        // Also expand on header click
+        const header = e.target.closest('.claim-card-header');
+        if (header && !e.target.closest('button')) {
+          const card = header.closest('.claim-card');
+          if (card) toggleClaimExpand(card.dataset.claimId);
+          return;
+        }
+
+        // Action buttons
+        const button = e.target.closest('button[data-claim-id][data-action]');
+        if (!button) return;
+
+        const claimId = button.dataset.claimId;
+        const action = button.dataset.action;
+
+        if (action === 'toggle-expand') return; // already handled
+
+        if (action === 'tag-override') {
+          const current = state.claims.get(claimId) || {};
+          const currentTag = current.claimTypeTag || 'other';
+          const requestedTag = window.prompt('Enter tag: numeric_factual, simple_policy, other', currentTag)?.trim()?.toLowerCase();
+          if (!requestedTag) return;
+          if (!['numeric_factual', 'simple_policy', 'other'].includes(requestedTag)) {
+            showToast('Invalid tag value', 'error');
+            return;
+          }
+          const reason = window.prompt('Reason for tag override (required)', 'Manual editorial override')?.trim();
+          if (!reason) {
+            showToast('Reason is required', 'error');
+            return;
+          }
+          callClaimAction(claimId, action, { tag: requestedTag, reason });
+          return;
+        }
+
+        callClaimAction(claimId, action);
+      });
+
+      /* ============================================================
+         SSE EVENT HANDLING (preserved exactly)
+         ============================================================ */
+      const eventTypes = [
+        'pipeline.started',
+        'pipeline.stopped',
+        'pipeline.reconnect_scheduled',
+        'pipeline.reconnect_started',
+        'pipeline.reconnect_succeeded',
+        'pipeline.ingest_stalled',
+        'pipeline.log',
+        'pipeline.error',
+        'transcript.segment',
+        'transcript.error',
+        'claim.detected',
+        'claim.researching',
+        'claim.updated',
+        'claim.output_approved',
+        'claim.output_rejected',
+        'claim.output_package_queued',
+        'claim.output_package_ready',
+        'claim.output_package_failed',
+        'claim.render_queued',
+        'claim.render_ready',
+        'claim.render_failed'
+      ];
+
+      function handleEvent(e) {
+        const event = JSON.parse(e.data);
+
+        if (event.type === 'pipeline.started') {
+          state.ingestState = 'running';
+          state.claims.clear();
+          renderClaims();
+          transcriptList.innerHTML = '';
+          logList.innerHTML = '';
+          document.getElementById('transcript-zero').style.display = '';
+          document.getElementById('logs-zero').style.display = '';
+          setStatus(runningStatusText(event.chunkSeconds), true);
+          prependListItem(logList, `<strong>Pipeline started.</strong> ${escapeHtml(event.youtubeUrl)}`);
+          return;
+        }
+
+        if (event.type === 'pipeline.stopped') {
+          state.ingestState = 'stopped';
+          const reason = String(event.reason || 'unknown');
+          const statusText =
+            reason === 'source_ended'
+              ? 'Source ended'
+              : reason === 'reconnect_exhausted'
+                ? 'Stopped (reconnect exhausted)'
+                : 'Stopped';
+          setStatus(statusText, false);
+          prependListItem(logList, `<strong>Pipeline stopped.</strong> reason=${escapeHtml(event.reason)}`);
+          return;
+        }
+
+        if (event.type === 'pipeline.reconnect_scheduled') {
+          state.ingestState = 'reconnecting';
+          setStatus(runningStatusText(), true);
+          prependListItem(
+            logList,
+            `<strong>Reconnect scheduled.</strong> attempt=${escapeHtml(event.attempt)} delayMs=${escapeHtml(event.delayMs)} reason=${escapeHtml(event.reason)}`
+          );
+          return;
+        }
+
+        if (event.type === 'pipeline.reconnect_started') {
+          state.ingestState = 'reconnecting';
+          setStatus(runningStatusText(), true);
+          prependListItem(
+            logList,
+            `<strong>Reconnect attempt started.</strong> attempt=${escapeHtml(event.attempt)}`
+          );
+          return;
+        }
+
+        if (event.type === 'pipeline.reconnect_succeeded') {
+          state.ingestState = 'running';
+          setStatus(runningStatusText(), true);
+          prependListItem(
+            logList,
+            `<strong>Reconnect succeeded.</strong> attempt=${escapeHtml(event.attempt)}`
+          );
+          return;
+        }
+
+        if (event.type === 'pipeline.ingest_stalled') {
+          prependListItem(
+            logList,
+            `<strong>Ingest stalled.</strong><br /><span class="meta">idleMs=${escapeHtml(event.idleMs)} thresholdMs=${escapeHtml(event.thresholdMs)}</span>`
+          );
+          return;
+        }
+
+        if (event.type === 'pipeline.log' || event.type === 'pipeline.error' || event.type === 'transcript.error') {
+          prependListItem(logList, `<strong>${escapeHtml(event.type)}</strong><br /><span class="meta">${escapeHtml(event.message || '')}</span>`);
+          return;
+        }
+
+        if (event.type === 'transcript.segment') {
+          prependListItem(
+            transcriptList,
+            `<div><strong>${escapeHtml(event.startClock)} - ${escapeHtml(event.endClock)}</strong></div><div>${escapeHtml(event.text)}</div>`
+          );
+          return;
+        }
+
+        if (event.type === 'claim.detected') {
+          upsertClaim(event);
+          return;
+        }
+
+        if (event.type === 'claim.researching') {
+          upsertClaim(event, 'researching');
+          return;
+        }
+
+        if (
+          event.type === 'claim.updated' ||
+          event.type === 'claim.output_approved' ||
+          event.type === 'claim.output_rejected' ||
+          event.type === 'claim.output_package_queued' ||
+          event.type === 'claim.output_package_ready' ||
+          event.type === 'claim.output_package_failed' ||
+          event.type === 'claim.render_queued' ||
+          event.type === 'claim.render_ready' ||
+          event.type === 'claim.render_failed'
+        ) {
+          upsertClaim(event);
+        }
+      }
+
+      /* ============================================================
+         SSE CONNECTION
+         ============================================================ */
+      function connectEvents() {
+        if (state.eventSource) {
+          state.eventSource.close();
+          state.eventSource = null;
+        }
+
+        if (state.readAuthRequired && !getControlPassword()) {
+          return;
+        }
+
+        const source = new EventSource(withControlPassword('/events'));
+        state.eventSource = source;
+        for (const type of eventTypes) {
+          source.addEventListener(type, handleEvent);
+        }
+
+        source.onerror = () => {
+          const reconnectText = state.running
+            ? state.ingestState === 'reconnecting'
+              ? runningStatusText()
+              : 'Running (event stream reconnecting...)'
+            : 'Stopped';
+          setStatus(reconnectText, state.running);
+        };
+      }
+
+      /* ============================================================
+         CLAIMS SNAPSHOT
+         ============================================================ */
+      async function loadClaimsSnapshot() {
+        if (state.readAuthRequired && !getControlPassword()) {
+          state.claims.clear();
+          renderClaims();
+          prependListItem(
+            logList,
+            '<strong>Read endpoints protected.</strong> Enter control password to load claims/events.'
+          );
+          return;
+        }
+
+        const claimsRes = await fetch('/claims', {
+          headers: buildAuthHeaders()
+        });
+        const claimsPayload = await claimsRes.json().catch(() => ({}));
+        if (!claimsRes.ok) {
+          showToast(`Claims load failed: ${claimsPayload.error || 'unknown error'}`, 'error');
+          return;
+        }
+
+        state.claims.clear();
+        for (const claim of claimsPayload.claims || []) {
+          state.claims.set(claim.claimId, claim);
+        }
+        renderClaims();
+      }
+
+      /* ============================================================
+         SYSTEM INFO
+         ============================================================ */
+      function systemValueHtml(label, value) {
+        const v = String(value);
+        if (v === 'Configured') return '<span class="badge badge-success">Configured</span>';
+        if (v === 'Missing') return '<span class="badge badge-destructive">Missing</span>';
+        if (v === 'true') return '<span class="badge badge-success">true</span>';
+        if (v === 'false') return '<span class="badge badge-muted">false</span>';
+        if (v === 'running') return '<span class="badge badge-success">running</span>';
+        if (v === 'stopped') return '<span class="badge badge-warning">stopped</span>';
+        if (v === 'reconnecting') return '<span class="badge badge-warning">reconnecting</span>';
+        if (label === 'DB Error') {
+          if (v === 'none') return '<span class="badge badge-muted">none</span>';
+          return `<span class="badge badge-destructive">${escapeHtml(v)}</span>`;
+        }
+        return escapeHtml(v);
+      }
+
+      function renderSystemInfo(health) {
+        const info = document.getElementById('system-info');
+        const groups = [
+          { label: 'API Keys', rows: [
+            ['Gemini API Key', health.hasGeminiKey ? 'Configured' : 'Missing'],
+            ['Google Fact Check Key', health.hasGoogleFactCheckKey ? 'Configured' : 'Missing'],
+            ['FRED API Key', health.hasFredKey ? 'Configured' : 'Missing'],
+            ['Takumi Renderer', health.hasTakumiRenderer ? 'Configured' : 'Missing'],
+          ]},
+          { label: 'Security', rows: [
+            ['Auth Required', String(health.authRequired)],
+            ['Read Auth', String(health.protectReadEndpoints)],
+          ]},
+          { label: 'Pipeline', rows: [
+            ['Ingest State', state.ingestState],
+            ['Claim Threshold', String(health.claimDetectionThreshold)],
+            ['Reconnect Attempt', String(health.reconnectAttempt ?? 0)],
+            ['Reconnect Enabled', String(health.ingestReconnectEnabled)],
+          ]},
+          { label: 'Database', rows: [
+            ['DB Configured', String(health.database?.configured)],
+            ['DB Ready', String(health.database?.ready)],
+            ['DB Queue', String(health.database?.queueDepth)],
+            ['DB Error', health.database?.lastError || 'none'],
+          ]},
+        ];
+        info.innerHTML = groups.map((group, i) =>
+          `<h3 class="section-title" style="margin:${i === 0 ? '0' : '12px'} 0 4px">${escapeHtml(group.label)}</h3>` +
+          group.rows.map(([label, value]) =>
+            `<div class="system-row"><span class="label">${escapeHtml(label)}</span><span>${systemValueHtml(label, value)}</span></div>`
+          ).join('')
+        ).join('');
+      }
+
+      /* ============================================================
+         APP INIT
+         ============================================================ */
+      async function initApp() {
+        try {
+          const [healthRes, authStatusRes] = await Promise.all([
+            fetch('/health', { headers: buildAuthHeaders() }),
+            fetch('/auth-status')
+          ]);
+          const health = await healthRes.json();
+          const authStatus = await authStatusRes.json().catch(() => ({}));
+
+          state.authRequired = Boolean(authStatus.authRequired ?? health.authRequired);
+          state.readAuthRequired = Boolean(authStatus.protectReadEndpoints ?? health.protectReadEndpoints);
+          state.ingestState = String(health.ingestState || (health.running ? 'running' : 'stopped')).toLowerCase();
+
+          updateOverlayLaunchLink();
+          setStatus(health.running ? runningStatusText() : 'Stopped', health.running);
+          renderSystemInfo(health);
+
+          await loadClaimsSnapshot();
+          connectEvents();
+        } catch {
+          showToast('Startup checks failed', 'error');
+        }
+      }
+
+      /* ============================================================
+         BOOTSTRAP
+         ============================================================ */
+      if (checkAuth()) {
+        initApp();
+      }
+
+      window.addEventListener('beforeunload', () => {
+        state.eventSource?.close();
+      });
+    </script>
+  </body>
+</html>
