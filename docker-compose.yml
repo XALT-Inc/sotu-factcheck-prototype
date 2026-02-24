@@ -10,8 +10,8 @@ services:
     environment:
       HOST: 0.0.0.0
       PORT: 8787
-    ports:
-      - "8787:8787"
+    expose:
+      - "8787"
     restart: unless-stopped
     healthcheck:
       test:
@@ -25,3 +25,25 @@ services:
       timeout: 5s
       retries: 3
       start_period: 20s
+
+  caddy:
+    image: caddy:2-alpine
+    container_name: caddy-reverse-proxy
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    environment:
+      DOMAIN: ${DOMAIN:-localhost}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      sotu-factcheck:
+        condition: service_healthy
+
+volumes:
+  caddy_data:
+  caddy_config:

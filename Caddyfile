@@ -1,0 +1,21 @@
+{$DOMAIN:localhost} {
+    reverse_proxy sotu-factcheck:8787 {
+        flush_interval -1
+        transport http {
+            read_timeout 0
+            write_timeout 0
+            response_header_timeout 0
+        }
+    }
+
+    header {
+        X-Content-Type-Options nosniff
+        X-Frame-Options DENY
+        Referrer-Policy strict-origin-when-cross-origin
+    }
+
+    log {
+        output stdout
+        format console
+    }
+}
