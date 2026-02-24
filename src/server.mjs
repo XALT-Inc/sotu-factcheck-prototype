@@ -1062,9 +1062,12 @@ const server = http.createServer(async (request, response) => {
     const speechContext = String(body.speechContext ?? SPEECH_CONTEXT).trim();
     const operatorNotes = String(body.operatorNotes ?? OPERATOR_NOTES).trim();
     if (!isValidYoutubeUrl(youtubeUrl)) {
+      const hint = isValidYoutubeUrl(speechContext)
+        ? ' It looks like the YouTube URL was entered in the speech context field.'
+        : '';
       sendJson(response, 400, {
         ok: false,
-        error: 'A valid YouTube URL is required.'
+        error: 'A valid YouTube URL is required.' + hint
       });
       return;
     }

@@ -1273,11 +1273,21 @@
          PIPELINE CONTROL
          ============================================================ */
       async function startPipeline() {
-        const youtubeUrl = youtubeInput.value.trim();
+        let youtubeUrl = youtubeInput.value.trim();
+        let speechContext = document.getElementById('speech-context')?.value?.trim() || '';
+
+        // Auto-detect if the user pasted the YouTube URL into the speech context field
+        if (!youtubeUrl && speechContext && /^https?:\/\/(www\.)?(youtube\.com|youtu\.be)\//i.test(speechContext)) {
+          youtubeUrl = speechContext;
+          speechContext = '';
+          youtubeInput.value = youtubeUrl;
+          document.getElementById('speech-context').value = speechContext;
+        }
+
         const res = await fetch('/start', {
           method: 'POST',
           headers: buildAuthHeaders({ 'content-type': 'application/json' }),
-          body: JSON.stringify({ youtubeUrl, speechContext: document.getElementById('speech-context')?.value?.trim() || '' })
+          body: JSON.stringify({ youtubeUrl, speechContext })
         });
         const body = await res.json().catch(() => ({}));
         if (!res.ok) {
