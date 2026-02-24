@@ -92,6 +92,54 @@ function stripLeadingOverlap(newText, priorTail) {
   return newText;
 }
 
+function correctImplausibleAges(text) {
+  if (!text) return text;
+
+  // Pattern: "age(s|d) NNN to NNN" where both numbers are 100-199 → subtract 100
+  let corrected = text.replace(
+    /\b(ages?|aged)\s+(1\d{2})\s+(to|through|and)\s+(1\d{2})\b/gi,
+    (match, prefix, lo, conjunction, hi) => {
+      const loNum = Number(lo) - 100;
+      const hiNum = Number(hi) - 100;
+      if (loNum >= 0 && loNum <= 99 && hiNum >= 0 && hiNum <= 99 && loNum < hiNum) {
+        return `${prefix} ${loNum} ${conjunction} ${hiNum}`;
+      }
+      return match;
+    }
+  );
+
+  // Pattern: "age(s) over/above/of NNN" where NNN is 100-199 → subtract 100
+  corrected = corrected.replace(
+    /\b(ages?|aged)\s+(over|above|of|beyond)\s+(1\d{2})\b/gi,
+    (match, prefix, preposition, num) => {
+      const correctedNum = Number(num) - 100;
+      if (correctedNum >= 0 && correctedNum <= 99) {
+        return `${prefix} ${preposition} ${correctedNum}`;
+      }
+      return match;
+    }
+  );
+
+  return corrected;
+}
+
+function warnImplausibleAges(text, emitFn, chunkIdx) {
+  if (!text) return;
+  const pattern = /\b(ages?|aged)\s+(\d{3,})\b/gi;
+  let match;
+  while ((match = pattern.exec(text)) !== null) {
+    const num = Number(match[2]);
+    if (num > 130) {
+      emitFn('pipeline.warning', {
+        stage: 'transcription_postprocess',
+        message: `Implausible age reference "${match[0]}" in chunk ${chunkIdx}`,
+        chunkIndex: chunkIdx,
+        value: num
+      });
+    }
+  }
+}
+
 function normalizeClaimKey(value) {
   return String(value ?? '')
     .toLowerCase()
@@ -107,6 +155,23 @@ async function transcribePcmChunk(pcmChunk, options) {
     bitDepth: 16
   });
 
+  const domainContext = options.speechContext
+    ? `This is a live political speech: ${options.speechContext}.`
+    : 'This is a live political speech.';
+
+  const systemText = [
+    `You are a precise speech-to-text transcriber. ${domainContext}`,
+    'Accuracy rules:',
+    '- Human ages almost never exceed 100. If you hear an age that sounds like 140, it is almost certainly 40.',
+    '- Prefer plausible numbers when the audio is ambiguous (e.g., billions not trillions for government programs, percentages under 100).',
+    '- Transcribe numbers, dollar amounts, and statistics exactly as spoken.',
+    '- Output verbatim transcript text only — no commentary, timestamps, or formatting.'
+  ].join('\n');
+
+  const turnText = options.priorContext
+    ? `Continue transcription. Previous segment ended with: "${options.priorContext}". Do not repeat prior text.`
+    : 'Transcribe this audio chunk verbatim.';
+
   const response = await fetch(
     `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(
       options.model ?? 'gemini-2.5-flash'
@@ -118,14 +183,13 @@ async function transcribePcmChunk(pcmChunk, options) {
         'x-goog-api-key': options.apiKey
       },
       body: JSON.stringify({
+        system_instruction: {
+          parts: [{ text: systemText }]
+        },
         contents: [
           {
             parts: [
-              {
-                text: options.priorContext
-                  ? `You are transcribing a continuous speech. The previous segment ended with: "${options.priorContext}". Continue the verbatim transcription from where this left off. Do not repeat text from the previous segment. Return only the new transcript text.`
-                  : 'Transcribe the speech in this audio chunk verbatim. Return only plain transcript text.'
-              },
+              { text: turnText },
               {
                 inlineData: {
                   mimeType: 'audio/wav',
@@ -1145,7 +1209,8 @@ export function createPipeline(options) {
         apiKey: geminiApiKey,
         model: geminiModel,
         signal: abortController.signal,
-        priorContext: previousTranscriptTail || undefined
+        priorContext: previousTranscriptTail || undefined,
+        speechContext: speechContext || undefined
       });
     } catch (error) {
       if (isAborted()) {
@@ -1170,6 +1235,10 @@ export function createPipeline(options) {
     if (!transcript) {
       return;
     }
+
+    // Fix hundred-inflated ages (e.g., "ages 140 to 149" → "ages 40 to 49")
+    transcript = correctImplausibleAges(transcript);
+    warnImplausibleAges(transcript, emit, item.chunkIndex);
 
     // Update rolling context tail for next chunk
     previousTranscriptTail = transcript.slice(-TRANSCRIPT_CONTEXT_CHARS);
