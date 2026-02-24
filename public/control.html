@@ -457,6 +457,7 @@
       }
       .comparison-label.claimed { background: hsl(var(--destructive) / 0.15); color: hsl(0 84% 75%); }
       .comparison-label.actual { background: hsl(var(--success) / 0.15); color: hsl(142 76% 70%); }
+      .comparison-label.summary { background: hsl(var(--accent)); color: hsl(var(--muted-foreground)); }
       .comparison-text {
         font-size: 0.8125rem;
         line-height: 1.5;
@@ -573,6 +574,9 @@
           <!-- Control Strip -->
           <div class="control-strip card card-sm">
             <input class="input" id="youtube-url" type="url" placeholder="https://www.youtube.com/watch?v=..." />
+            <input class="input" id="speech-context" type="text"
+                   placeholder="Speech context (e.g., 2026 State of the Union by President Trump)"
+                   style="flex-basis: 100%; margin-top: 4px;" />
             <button class="btn btn-primary btn-sm" id="start-btn" title="Start"><svg width="16" height="16" viewBox="0 0 20 20" fill="currentColor"><path d="M6.3 2.841A1.5 1.5 0 004 4.11V15.89a1.5 1.5 0 002.3 1.269l9.344-5.89a1.5 1.5 0 000-2.538L6.3 2.84z"/></svg></button>
             <button class="btn btn-secondary btn-sm" id="stop-btn" title="Stop"><svg width="16" height="16" viewBox="0 0 20 20" fill="currentColor"><path d="M5.25 3A2.25 2.25 0 003 5.25v9.5A2.25 2.25 0 005.25 17h9.5A2.25 2.25 0 0017 14.75v-9.5A2.25 2.25 0 0014.75 3h-9.5z"/></svg></button>
             <div class="status-pill stopped" id="status">
@@ -993,7 +997,7 @@
 
           const showComparison = row.correctedClaim;
 
-          // Build comparison HTML
+          // Build comparison HTML (unified CLAIMED → ACTUAL → AI SUMMARY flow)
           const comparisonHtml = showComparison ? `
             <div class="claim-comparison">
               <div class="comparison-row">
@@ -1004,14 +1008,17 @@
                 <span class="comparison-label actual">ACTUAL:</span>
                 <span class="comparison-text">${escapeHtml(row.correctedClaim.slice(0, 484))}</span>
               </div>
+              <div class="comparison-row">
+                <span class="comparison-label summary">AI SUMMARY:</span>
+                <span class="comparison-text">${escapeHtml(displaySummary)}</span>
+              </div>
             </div>
-          ` : '';
-
-          // Build AI summary HTML
-          const aiSummaryHtml = `
-            <div class="ai-summary">
-              <div class="ai-summary-label">AI Summary${row.evidenceBasis ? ` <span class="badge badge-muted" style="margin-left:6px;font-size:0.625rem;">${escapeHtml(row.evidenceBasis)}</span>` : ''}</div>
-              <div class="ai-summary-text">${escapeHtml(displaySummary)}</div>
+          ` : `
+            <div class="claim-comparison">
+              <div class="comparison-row">
+                <span class="comparison-label summary">AI SUMMARY:</span>
+                <span class="comparison-text">${escapeHtml(displaySummary)}</span>
+              </div>
             </div>
           `;
 
@@ -1072,13 +1079,12 @@
               </div>
               <div class="claim-card-center">
                 <p class="claim-text">${escapeHtml(row.claim || '')}</p>
-                <span class="badge badge-muted">${escapeHtml(humanize(tag))}</span>
               </div>
               <div class="claim-card-right">
                 <span class="badge ${verdictBadgeClass(displayVerdict)}">${escapeHtml(verdictDisplayLabel(displayVerdict))}</span>
                 ${isResearching
                   ? '<span class="badge badge-researching"><span class="research-spinner"></span>RESEARCHING</span>'
-                  : `<span class="badge ${approvalBadgeClass(approval)}">${escapeHtml(approvalText(approval))}</span>`}
+                  : ''}
                 <button class="btn btn-ghost btn-sm expand-btn" data-claim-id="${escapeHtml(row.claimId)}" data-action="toggle-expand">
                   <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M4 6l4 4 4-4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
                 </button>
@@ -1090,7 +1096,6 @@
                 <span class="verdict-confidence">${displayConfidence != null ? escapeHtml(Math.round(displayConfidence * 100)) + '%' : ''}</span>
               </div>
               ${comparisonHtml}
-              ${aiSummaryHtml}
               ${evidenceHtml}
               <div class="claim-actions">
                 ${actionsHtml}
@@ -1272,7 +1277,7 @@
         const res = await fetch('/start', {
           method: 'POST',
           headers: buildAuthHeaders({ 'content-type': 'application/json' }),
-          body: JSON.stringify({ youtubeUrl })
+          body: JSON.stringify({ youtubeUrl, speechContext: document.getElementById('speech-context')?.value?.trim() || '' })
         });
         const body = await res.json().catch(() => ({}));
         if (!res.ok) {

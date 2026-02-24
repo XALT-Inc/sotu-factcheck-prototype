@@ -20,7 +20,40 @@ const CLAIM_KEYWORDS = [
   'wages',
   'gdp',
   'economy',
-  'growth'
+  'growth',
+  'won',
+  'lost',
+  'victory',
+  'defeated',
+  'elected',
+  'votes',
+  'electoral',
+  'swing',
+  'majority',
+  'unanimous',
+  'landslide',
+  'mandate',
+  'signed',
+  'enacted',
+  'repealed',
+  'executive order',
+  'legislation',
+  'bipartisan',
+  'veto',
+  'passed',
+  'overturned',
+  'first',
+  'never',
+  'most',
+  'least',
+  'greatest',
+  'all-time',
+  'troops',
+  'withdrawal',
+  'ceasefire',
+  'sanctions',
+  'alliance',
+  'nato'
 ];
 
 const ECONOMIC_KEYWORDS = [
@@ -38,6 +71,35 @@ const ECONOMIC_KEYWORDS = [
   'interest rate',
   'cpi',
   'labor force'
+];
+
+const POLITICAL_KEYWORDS = [
+  'won',
+  'lost',
+  'victory',
+  'defeated',
+  'elected',
+  'votes',
+  'electoral',
+  'swing',
+  'majority',
+  'landslide',
+  'mandate',
+  'passed',
+  'signed',
+  'enacted',
+  'repealed',
+  'veto',
+  'executive order',
+  'legislation',
+  'bipartisan',
+  'congress',
+  'senate',
+  'house',
+  'bill',
+  'law',
+  'nomination',
+  'confirmed'
 ];
 
 const COMPARATIVE_PATTERN =
@@ -85,13 +147,27 @@ function scoreSentence(sentence) {
 function categorizeClaim(sentence) {
   const lower = sentence.toLowerCase();
   const hasEconomicKeyword = ECONOMIC_KEYWORDS.some((keyword) => lower.includes(keyword));
-  return hasEconomicKeyword ? 'economic' : 'general';
+  if (hasEconomicKeyword) {
+    return 'economic';
+  }
+  const hasPoliticalKeyword = POLITICAL_KEYWORDS.some((keyword) => lower.includes(keyword));
+  if (hasPoliticalKeyword) {
+    return 'political';
+  }
+  return 'general';
 }
 
 function classifyClaimType(sentence, reasons) {
   const lower = sentence.toLowerCase();
   const hasNumber = /\d/.test(lower) || reasons.includes('contains_number');
   if (hasNumber) {
+    return 'numeric_factual';
+  }
+
+  // Political claims with verifiable outcomes (e.g., "won all seven swing states")
+  const hasPoliticalVerifiable = POLITICAL_KEYWORDS.some((keyword) => lower.includes(keyword)) &&
+    (reasons.includes('contains_claim_keyword') || reasons.includes('contains_comparative'));
+  if (hasPoliticalVerifiable) {
     return 'numeric_factual';
   }
 

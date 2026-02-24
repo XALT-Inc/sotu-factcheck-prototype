@@ -4,6 +4,7 @@ import { randomUUID } from 'node:crypto';
 import { detectClaims } from './claimDetector.mjs';
 import { lookupFactChecks } from './factCheckClient.mjs';
 import { lookupFredEvidence } from './fredClient.mjs';
+import { lookupCongressEvidence } from './congressClient.mjs';
 import { verifyClaim } from './geminiVerifier.mjs';
 import { pcm16ToWav } from './wav.mjs';
 
@@ -12,7 +13,7 @@ const CHANNELS = 1;
 const BYTES_PER_SAMPLE = 2;
 const CLOSE_WAIT_MS = 1500;
 const CLAIM_CARRYOVER_MAX_CHARS = 900;
-const CLAIM_FALLBACK_FLUSH_CHARS = 320;
+const CLAIM_FALLBACK_FLUSH_CHARS = 160;
 const CLAIM_RECENT_DEDUPE_TTL_MS = 10 * 60 * 1000;
 const CLAIM_RECENT_DEDUPE_MAX = 1000;
 const TRANSCRIPT_CONTEXT_CHARS = 200;
@@ -174,6 +175,7 @@ export function createPipeline(options) {
   const geminiVerifyModel = options.geminiVerifyModel ?? 'gemini-2.5-flash';
   const factCheckApiKey = options.factCheckApiKey;
   const fredApiKey = options.fredApiKey;
+  const congressApiKey = options.congressApiKey;
   const chunkSeconds = Math.max(5, Math.min(30, options.chunkSeconds ?? 15));
   const maxResearchConcurrency = Math.max(
     1,
@@ -193,6 +195,8 @@ export function createPipeline(options) {
     0.55,
     Math.min(0.9, Number(options.claimDetectionThreshold ?? 0.62))
   );
+  const speechContext = options.speechContext ?? '';
+  const operatorNotes = options.operatorNotes ?? '';
 
   const chunkBytes = chunkSeconds * SAMPLE_RATE * CHANNELS * BYTES_PER_SAMPLE;
 
@@ -392,7 +396,7 @@ export function createPipeline(options) {
     const carryoverWords = claimSentenceCarryover.split(/\s+/).filter(Boolean).length;
     if (
       claimSentenceCarryover.length >= CLAIM_FALLBACK_FLUSH_CHARS &&
-      carryoverWords >= 35
+      carryoverWords >= 15
     ) {
       const flushed = claimSentenceCarryover;
       claimSentenceCarryover = '';
@@ -868,6 +872,29 @@ export function createPipeline(options) {
 
       teardownAttempt(attempt);
       finalizeAttempt(attempt, 'process_error');
+
+      // Transcription queue depth monitoring
+      if (transcriptionQueue.length > 3 && transcribing) {
+        emit('pipeline.warning', {
+          stage: 'transcription_queue',
+          message: `Transcription queue depth=${transcriptionQueue.length} while transcribing=${transcribing}`,
+          queueDepth: transcriptionQueue.length
+        });
+      }
+      if (transcriptionQueue.length > 10 && transcribing) {
+        emit('pipeline.warning', {
+          stage: 'transcription_queue',
+          message: `Force-resetting transcription mutex (queue depth=${transcriptionQueue.length})`,
+          queueDepth: transcriptionQueue.length
+        });
+        transcribing = false;
+        drainTranscriptionQueue().catch((err) => {
+          emit('pipeline.error', {
+            stage: 'transcription_drain',
+            message: `Transcription drain failed after mutex reset: ${err.message}`
+          });
+        });
+      }
     }, 2000);
 
     if (typeof stallWatchdog.unref === 'function') {
@@ -933,6 +960,23 @@ export function createPipeline(options) {
         }
       }
 
+      let congressResult = {
+        state: 'not_applicable',
+        summary: 'No legislative evidence lookup required for this claim.',
+        sources: []
+      };
+
+      if (claimPayload.claimCategory === 'political' || claimPayload.claimCategory === 'legislative') {
+        congressResult = await lookupCongressEvidence(claimPayload.claim, {
+          apiKey: congressApiKey,
+          signal: abortController.signal
+        });
+
+        if (isAborted()) {
+          return;
+        }
+      }
+
       const aiResult = await verifyClaim(
         claimPayload.claim,
         {
@@ -947,8 +991,16 @@ export function createPipeline(options) {
             summary: fredResult.summary,
             sources: fredResult.sources
           },
+          congress: {
+            state: congressResult.state,
+            summary: congressResult.summary,
+            sources: congressResult.sources
+          },
           claimCategory: claimPayload.claimCategory ?? 'general',
-          claimTypeTag: claimPayload.claimTypeTag ?? 'other'
+          claimTypeTag: claimPayload.claimTypeTag ?? 'other',
+          currentDate: new Date().toISOString().slice(0, 10),
+          speechContext: speechContext || undefined,
+          operatorNotes: operatorNotes || undefined
         },
         {
           apiKey: geminiApiKey,
@@ -962,11 +1014,19 @@ export function createPipeline(options) {
       }
 
       // Determine authoritative verdict for graphics
-      // Priority: Google FC verdict > FRED-backed AI verdict > 'unverified'
-      let authoritativeVerdict = result.verdict; // Google FC verdict
-      if (authoritativeVerdict === 'unverified' && fredResult.state === 'matched') {
+      // Priority: high-confidence Google FC verdict > FRED-backed AI verdict > evidence-backed AI verdict > 'unverified'
+      let authoritativeVerdict = 'unverified';
+      if (result.verdict !== 'unverified' && result.confidence >= 0.5) {
+        // Google FC with sufficient confidence
+        authoritativeVerdict = result.verdict;
+      } else if (fredResult.state === 'matched') {
         // FRED data provides authoritative economic evidence
-        // Use AI verdict only when backed by FRED data
+        authoritativeVerdict = aiResult.aiVerdict;
+      } else if (congressResult.state === 'matched' && aiResult.aiConfidence >= 0.4) {
+        // Congress data provides authoritative legislative evidence
+        authoritativeVerdict = aiResult.aiVerdict;
+      } else if (aiResult.evidenceBasis && aiResult.evidenceBasis !== 'general_knowledge' && aiResult.aiConfidence >= 0.5) {
+        // AI verdict backed by external evidence
         authoritativeVerdict = aiResult.aiVerdict;
       }
 
@@ -986,6 +1046,9 @@ export function createPipeline(options) {
         fredEvidenceState: fredResult.state,
         fredEvidenceSummary: fredResult.summary,
         fredEvidenceSources: fredResult.sources,
+        congressEvidenceState: congressResult.state,
+        congressEvidenceSummary: congressResult.summary,
+        congressEvidenceSources: congressResult.sources,
         correctedClaim: aiResult.correctedClaim,
         aiSummary: aiResult.aiSummary,
         aiVerdict: aiResult.aiVerdict,
@@ -1020,6 +1083,13 @@ export function createPipeline(options) {
             ? `FRED lookup not completed: ${error.message}`
             : 'No economic indicator mapping required for this claim.',
         fredEvidenceSources: [],
+        congressEvidenceState:
+          (claimPayload.claimCategory === 'political' || claimPayload.claimCategory === 'legislative') ? 'error' : 'not_applicable',
+        congressEvidenceSummary:
+          (claimPayload.claimCategory === 'political' || claimPayload.claimCategory === 'legislative')
+            ? `Congress.gov lookup not completed: ${error.message}`
+            : 'No legislative evidence lookup required for this claim.',
+        congressEvidenceSources: [],
         correctedClaim: null,
         aiSummary: null,
         aiVerdict: 'unverified',
@@ -1116,38 +1186,45 @@ export function createPipeline(options) {
     scheduleTranscriptFlush();
 
     // Claim detection still operates on per-chunk transcript
-    const claimDetectionText = claimDetectionTextFromTranscript(transcript);
-    if (!claimDetectionText) {
-      return;
-    }
-
-    const claims = detectClaims(claimDetectionText, {
-      chunkStartSec: item.startSec,
-      threshold: claimDetectionThreshold
-    });
-
-    for (const detected of claims) {
-      if (markClaimSeenAndCheckDuplicate(detected.text)) {
-        continue;
+    try {
+      const claimDetectionText = claimDetectionTextFromTranscript(transcript);
+      if (!claimDetectionText) {
+        return;
       }
 
-      const claimId = `${runId}-claim-${String(++claimIndex).padStart(4, '0')}`;
-      const claimPayload = {
-        claimId,
-        claim: detected.text,
-        status: 'pending_research',
-        verdict: 'unverified',
-        confidence: Number(detected.score.toFixed(2)),
-        reasons: detected.reasons,
-        claimCategory: detected.category ?? 'general',
-        claimTypeTag: detected.claimTypeTag ?? 'other',
-        claimTypeConfidence: detected.claimTypeConfidence ?? Number(detected.score.toFixed(2)),
-        chunkStartSec: detected.chunkStartSec,
-        chunkStartClock: clockTime(detected.chunkStartSec)
-      };
+      const claims = detectClaims(claimDetectionText, {
+        chunkStartSec: item.startSec,
+        threshold: claimDetectionThreshold
+      });
 
-      emit('claim.detected', claimPayload);
-      queueResearchClaim(claimPayload);
+      for (const detected of claims) {
+        if (markClaimSeenAndCheckDuplicate(detected.text)) {
+          continue;
+        }
+
+        const claimId = `${runId}-claim-${String(++claimIndex).padStart(4, '0')}`;
+        const claimPayload = {
+          claimId,
+          claim: detected.text,
+          status: 'pending_research',
+          verdict: 'unverified',
+          confidence: Number(detected.score.toFixed(2)),
+          reasons: detected.reasons,
+          claimCategory: detected.category ?? 'general',
+          claimTypeTag: detected.claimTypeTag ?? 'other',
+          claimTypeConfidence: detected.claimTypeConfidence ?? Number(detected.score.toFixed(2)),
+          chunkStartSec: detected.chunkStartSec,
+          chunkStartClock: clockTime(detected.chunkStartSec)
+        };
+
+        emit('claim.detected', claimPayload);
+        queueResearchClaim(claimPayload);
+      }
+    } catch (claimDetectionError) {
+      emit('pipeline.error', {
+        stage: 'claim_detection',
+        message: `Claim detection failed: ${claimDetectionError.message}`
+      });
     }
   }
 
@@ -1157,11 +1234,21 @@ export function createPipeline(options) {
     }
 
     transcribing = true;
-    while (running && transcriptionQueue.length > 0) {
-      const next = transcriptionQueue.shift();
-      await handleTranscriptionChunk(next);
+    try {
+      while (running && transcriptionQueue.length > 0) {
+        const next = transcriptionQueue.shift();
+        try {
+          await handleTranscriptionChunk(next);
+        } catch (chunkError) {
+          emit('pipeline.error', {
+            stage: 'transcription_chunk',
+            message: `Transcription chunk failed: ${chunkError.message}`
+          });
+        }
+      }
+    } finally {
+      transcribing = false;
     }
-    transcribing = false;
   }
 
   function queueChunk(pcmChunk, chunkNo) {
@@ -1182,7 +1269,12 @@ export function createPipeline(options) {
       bytes: pcmChunk.length
     });
 
-    void drainTranscriptionQueue();
+    drainTranscriptionQueue().catch((err) => {
+      emit('pipeline.error', {
+        stage: 'transcription_drain',
+        message: `Transcription drain failed: ${err.message}`
+      });
+    });
   }
 
   function handleAudioData(audioData) {

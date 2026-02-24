@@ -21,7 +21,7 @@ function localFallbackSvgArtifact(claim) {
     true: { bg: '#166534', text: '#4ade80', label: 'TRUE' },
     false: { bg: '#991b1b', text: '#f87171', label: 'FALSE' },
     misleading: { bg: '#92400e', text: '#fbbf24', label: 'MISLEADING' },
-    supported: { bg: '#166534', text: '#4ade80', label: 'SUPPORTED' },
+    verified: { bg: '#166534', text: '#4ade80', label: 'VERIFIED' },
     unverified: { bg: '#c2410c', text: '#fb923c', label: 'UNSUPPORTED' }
   };
   const vc = verdictColors[verdict] || verdictColors.unverified;

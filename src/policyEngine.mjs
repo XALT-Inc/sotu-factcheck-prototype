@@ -33,7 +33,7 @@ function ratingBucket(text = '') {
   }
 
   if (rating.includes('true') || rating.includes('correct') || rating.includes('mostly true')) {
-    return 'supported';
+    return 'true';
   }
 
   return 'unverified';
@@ -86,8 +86,16 @@ function evidenceStatusForClaim(claim, independentSourceCount, evidenceConflict)
       return 'insufficient';
     }
     // If FRED matched, that IS the authoritative source — no Google FC needed
+  } else if (claim.claimCategory === 'political' || claim.claimCategory === 'legislative') {
+    const congressState = String(claim.congressEvidenceState ?? 'not_applicable');
+    if (congressState === 'error') {
+      return 'provider_degraded';
+    }
+    if (congressState !== 'matched' && independentSourceCount < 1) {
+      return 'insufficient';
+    }
   } else {
-    // Non-economic: require at least 1 Google FC source
+    // General claims: require at least 1 Google FC source
     if (independentSourceCount < 1) {
       return 'insufficient';
     }

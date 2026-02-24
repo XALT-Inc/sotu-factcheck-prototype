@@ -76,7 +76,7 @@ function normalizeVerdict(textualRating = '') {
     rating.includes('accurate') ||
     rating.includes('authentic')
   ) {
-    return 'supported';
+    return 'true';
   }
 
   return 'unverified';
@@ -85,11 +85,9 @@ function normalizeVerdict(textualRating = '') {
 function verdictWeight(verdict) {
   switch (verdict) {
     case 'false':
-      return 0.9;
     case 'misleading':
+    case 'true':
       return 0.8;
-    case 'supported':
-      return 0.75;
     default:
       return 0.35;
   }
@@ -135,10 +133,24 @@ function candidatesFromApiClaims(claimText, apiClaims = []) {
       const matchScore = similarity(claimText, sourceText);
       const weight = verdictWeight(verdict);
 
+      // Hard cutoff: skip candidates older than 4 years entirely
+      let recencyMultiplier = 1.0;
+      if (review.reviewDate) {
+        const reviewDate = new Date(review.reviewDate);
+        const ageMs = Date.now() - reviewDate.getTime();
+        const ageYears = ageMs / (365.25 * 24 * 60 * 60 * 1000);
+        if (ageYears > 4) {
+          continue; // Skip — wrong era
+        }
+        if (ageYears > 2) {
+          recencyMultiplier = Math.max(0.5, 1.0 - (ageYears - 2) * 0.15);
+        }
+      }
+
       candidates.push({
         verdict,
         score: matchScore,
-        confidence: Math.min(0.98, 0.25 + matchScore * 0.45 + weight * 0.3),
+        confidence: Math.min(0.98, (0.25 + matchScore * 0.45 + weight * 0.3) * recencyMultiplier),
         claimReviewed: reviewed,
         textualRating,
         publisher: review.publisher?.name ?? 'Unknown publisher',
@@ -196,6 +208,7 @@ export async function lookupFactChecks(claimText, options = {}) {
         const response = await fetch(url, { signal });
         if (!response.ok) {
           const body = await response.text();
+          console.error(`[factCheckClient] API error (${response.status}): ${body.slice(0, 160)}`);
           return {
             status: 'needs_manual_research',
             verdict: 'unverified',
@@ -255,6 +268,7 @@ export async function lookupFactChecks(claimText, options = {}) {
       sources
     };
   } catch (error) {
+    console.error('[factCheckClient] Lookup error:', error.message);
     return {
       status: 'needs_manual_research',
       verdict: 'unverified',

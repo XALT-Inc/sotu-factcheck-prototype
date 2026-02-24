@@ -12,6 +12,14 @@ import { createRenderService } from './renderService.mjs';
 
 loadEnv();
 
+process.on('unhandledRejection', (reason) => {
+  console.error('[unhandledRejection]', reason);
+});
+
+process.on('uncaughtException', (error) => {
+  console.error('[uncaughtException]', error);
+});
+
 function parseNonNegativeInt(value, fallback, max = Number.MAX_SAFE_INTEGER) {
   const parsed = Number.parseInt(String(value ?? ''), 10);
   if (!Number.isInteger(parsed) || parsed < 0) {
@@ -66,6 +74,9 @@ const INGEST_STALL_TIMEOUT_MS = parsePositiveInt(
 const INGEST_VERBOSE_LOGS = String(process.env.INGEST_VERBOSE_LOGS ?? 'false')
   .trim()
   .toLowerCase() === 'true';
+
+const SPEECH_CONTEXT = String(process.env.SPEECH_CONTEXT ?? '').trim();
+const OPERATOR_NOTES = String(process.env.OPERATOR_NOTES ?? '').trim();
 
 const rootDir = process.cwd();
 const publicDir = path.join(rootDir, 'public');
@@ -264,6 +275,9 @@ function buildClaimEventPayload(type, claim, extras = {}) {
     fredEvidenceState: claim.fredEvidenceState,
     fredEvidenceSummary: claim.fredEvidenceSummary,
     fredEvidenceSources: claim.fredEvidenceSources,
+    congressEvidenceState: claim.congressEvidenceState,
+    congressEvidenceSummary: claim.congressEvidenceSummary,
+    congressEvidenceSources: claim.congressEvidenceSources,
     ...extras
   };
 }
@@ -326,6 +340,9 @@ function claimSnapshotEventFields(claim) {
     fredEvidenceState: claim.fredEvidenceState,
     fredEvidenceSummary: claim.fredEvidenceSummary,
     fredEvidenceSources: claim.fredEvidenceSources,
+    congressEvidenceState: claim.congressEvidenceState,
+    congressEvidenceSummary: claim.congressEvidenceSummary,
+    congressEvidenceSources: claim.congressEvidenceSources,
     correctedClaim: claim.correctedClaim,
     aiSummary: claim.aiSummary,
     aiVerdict: claim.aiVerdict,
@@ -385,6 +402,14 @@ function updateClaimState(event) {
           ? 'Awaiting economic evidence enrichment.'
           : 'No economic indicator mapping required for this claim.',
       fredEvidenceSources: [],
+      congressEvidenceState:
+        (event.claimCategory === 'political' || event.claimCategory === 'legislative')
+          ? 'ambiguous' : 'not_applicable',
+      congressEvidenceSummary:
+        (event.claimCategory === 'political' || event.claimCategory === 'legislative')
+          ? 'Awaiting legislative evidence enrichment.'
+          : 'No legislative evidence lookup required for this claim.',
+      congressEvidenceSources: [],
       correctedClaim: null,
       aiSummary: null,
       aiVerdict: null,
@@ -456,6 +481,9 @@ function updateClaimState(event) {
       fredEvidenceState: event.fredEvidenceState ?? existing.fredEvidenceState ?? 'not_applicable',
       fredEvidenceSummary: event.fredEvidenceSummary ?? existing.fredEvidenceSummary ?? null,
       fredEvidenceSources: event.fredEvidenceSources ?? existing.fredEvidenceSources ?? [],
+      congressEvidenceState: event.congressEvidenceState ?? existing.congressEvidenceState ?? 'not_applicable',
+      congressEvidenceSummary: event.congressEvidenceSummary ?? existing.congressEvidenceSummary ?? null,
+      congressEvidenceSources: event.congressEvidenceSources ?? existing.congressEvidenceSources ?? [],
       correctedClaim: event.correctedClaim ?? existing.correctedClaim ?? null,
       aiSummary: event.aiSummary ?? existing.aiSummary ?? null,
       aiVerdict: event.aiVerdict ?? existing.aiVerdict ?? null,
@@ -764,7 +792,8 @@ function emitEvent(event) {
       if (!client.destroyed) {
         client.write(data);
       }
-    } catch {
+    } catch (sseError) {
+      console.error('[SSE broadcast] client write failed, removing client:', sseError.message);
       sseClients.delete(client);
     }
   }
@@ -854,6 +883,7 @@ const server = http.createServer(async (request, response) => {
       hasGeminiKey: Boolean(process.env.GEMINI_API_KEY),
       hasGoogleFactCheckKey: Boolean(process.env.GOOGLE_FACT_CHECK_API_KEY),
       hasFredKey: Boolean(FRED_API_KEY),
+      hasCongressKey: Boolean(process.env.CONGRESS_API_KEY),
       hasTakumiRenderer: Boolean(TAKUMI_RENDER_URL),
       authRequired: Boolean(CONTROL_PASSWORD),
       protectReadEndpoints: PROTECT_READ_ENDPOINTS,
@@ -1029,6 +1059,8 @@ const server = http.createServer(async (request, response) => {
     }
 
     const youtubeUrl = String(body.youtubeUrl ?? '').trim();
+    const speechContext = String(body.speechContext ?? SPEECH_CONTEXT).trim();
+    const operatorNotes = String(body.operatorNotes ?? OPERATOR_NOTES).trim();
     if (!isValidYoutubeUrl(youtubeUrl)) {
       sendJson(response, 400, {
         ok: false,
@@ -1057,6 +1089,7 @@ const server = http.createServer(async (request, response) => {
       geminiModel: process.env.GEMINI_TRANSCRIBE_MODEL,
       factCheckApiKey: process.env.GOOGLE_FACT_CHECK_API_KEY,
       fredApiKey: FRED_API_KEY,
+      congressApiKey: process.env.CONGRESS_API_KEY,
       chunkSeconds: CHUNK_SECONDS,
       maxResearchConcurrency: MAX_RESEARCH_CONCURRENCY,
       claimDetectionThreshold: CLAIM_DETECTION_THRESHOLD,
@@ -1067,6 +1100,8 @@ const server = http.createServer(async (request, response) => {
       ingestStallTimeoutMs: INGEST_STALL_TIMEOUT_MS,
       ingestVerboseLogs: INGEST_VERBOSE_LOGS,
       geminiVerifyModel: process.env.GEMINI_VERIFY_MODEL,
+      speechContext,
+      operatorNotes,
       onEvent: emitEvent
     });
 
@@ -1492,16 +1527,6 @@ const server = http.createServer(async (request, response) => {
   }
 
   sendJson(response, 404, { ok: false, error: 'Not found' });
-});
-
-process.on('uncaughtException', (error) => {
-  // eslint-disable-next-line no-console
-  console.error(`[uncaughtException] ${error.stack ?? error.message}`);
-});
-
-process.on('unhandledRejection', (reason) => {
-  // eslint-disable-next-line no-console
-  console.error(`[unhandledRejection] ${reason?.stack ?? reason}`);
 });
 
 server.on('clientError', (error, socket) => {
