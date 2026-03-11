@@ -1,0 +1,443 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>XALT Factchecker Overlay</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Roboto:wght@400;500;700&display=swap" rel="stylesheet" />
+    <style>
+      * {
+        box-sizing: border-box;
+      }
+
+      html,
+      body {
+        margin: 0;
+        width: 100%;
+        height: 100%;
+        background: transparent;
+        font-family: 'Roboto', -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+      }
+
+      /* ---------- Overlay Content Wrapper ---------- */
+      .overlay-content {
+        width: min(460px, 96vw);
+        display: flex;
+        flex-direction: column;
+        gap: 16px;
+      }
+
+      /* ---------- Header Bar ---------- */
+      .overlay-header {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        height: 64px;
+        padding: 0 24px;
+        background: linear-gradient(270deg, rgb(38, 45, 69), rgb(19, 24, 38));
+        border-radius: 0 0 32px 0;
+        box-shadow: 0 4px 4px rgba(0, 0, 0, 0.25);
+        flex-shrink: 0;
+      }
+
+      .header-logo {
+        width: 38px;
+        height: 38px;
+        flex-shrink: 0;
+      }
+
+      .header-title {
+        margin: 0;
+        font-size: 1.25rem;
+        font-weight: 700;
+        color: #ffffff;
+        letter-spacing: 0.08em;
+      }
+
+      .header-badge {
+        display: inline-flex;
+        align-items: center;
+        padding: 2px 10px;
+        border-radius: 999px;
+        font-size: 0.6875rem;
+        font-weight: 700;
+        text-transform: uppercase;
+        letter-spacing: 0.06em;
+        background: rgba(135, 166, 244, 0.2);
+        color: #87A6F4;
+      }
+
+      /* ---------- Frame / Position ---------- */
+      .frame {
+        width: 100%;
+        height: 100%;
+        display: flex;
+        padding: 26px;
+      }
+
+      .frame.bottom-left {
+        align-items: flex-end;
+        justify-content: flex-start;
+      }
+
+      .frame.bottom-right {
+        align-items: flex-end;
+        justify-content: flex-end;
+      }
+
+      .frame.top-left {
+        align-items: flex-start;
+        justify-content: flex-start;
+      }
+
+      .frame.top-right {
+        align-items: flex-start;
+        justify-content: flex-end;
+      }
+
+      /* ---------- Card Stack ---------- */
+      .stack {
+        display: flex;
+        flex-direction: column;
+        gap: 16px;
+      }
+
+      .stack:empty::after {
+        content: 'Waiting for approved claims...';
+        display: block;
+        color: rgba(255, 255, 255, 0.4);
+        font-size: 0.875rem;
+        padding: 16px;
+        text-align: center;
+      }
+
+      /* ---------- Card ---------- */
+      .card {
+        background: linear-gradient(114deg, #FFFFFF 4%, #D5DEFF 99%);
+        border: 2px solid #9CBFFF;
+        border-radius: 18px;
+        box-shadow: 0 0 24px rgba(37, 44, 68, 0.41);
+        padding: 16px 20px;
+        color: #262C44;
+        transform: translateY(20px);
+        opacity: 0;
+        animation: slideUp 280ms ease-out forwards;
+      }
+
+      .card.removing {
+        animation: fadeOut 200ms ease-in forwards;
+      }
+
+      .claim-text {
+        margin: 0 0 14px 0;
+        font-size: 1.125rem;
+        line-height: 1.35;
+        font-weight: 500;
+        color: #262C44;
+      }
+
+      /* ---------- Verdict Row ---------- */
+      .verdict-row {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+      }
+
+      .verdict-icon {
+        width: 22px;
+        height: 22px;
+        flex-shrink: 0;
+      }
+
+      .verdict-label {
+        font-size: 0.875rem;
+        font-weight: 700;
+        text-transform: uppercase;
+        letter-spacing: 0.06em;
+      }
+
+      .verdict-label.supported { color: #00C565; }
+      .verdict-label.false { color: #DC2626; }
+      .verdict-label.misleading { color: #D97706; }
+      .verdict-label.unverified { color: #6B7280; }
+
+      /* ---------- Animations ---------- */
+      @keyframes slideUp {
+        to {
+          transform: translateY(0);
+          opacity: 1;
+        }
+      }
+
+      @keyframes fadeOut {
+        to {
+          transform: translateY(-10px);
+          opacity: 0;
+        }
+      }
+
+      /* ---------- Corrected Claim ---------- */
+      .corrected-claim {
+        margin-top: 10px;
+        padding: 10px 14px;
+        border-left: 3px solid #00C565;
+        background: rgba(0, 197, 101, 0.08);
+        border-radius: 0 8px 8px 0;
+        font-size: 0.875rem;
+        line-height: 1.4;
+        color: #262C44;
+      }
+      .corrected-label {
+        font-weight: 700;
+        font-size: 0.6875rem;
+        text-transform: uppercase;
+        letter-spacing: 0.05em;
+        color: #00C565;
+        margin-right: 6px;
+      }
+
+      /* ---------- AI Summary ---------- */
+      .ai-summary-text {
+        margin: 8px 0 0 0;
+        font-size: 0.8125rem;
+        line-height: 1.4;
+        color: #4B5563;
+      }
+
+      @media (max-width: 700px) {
+        .frame {
+          padding: 12px;
+        }
+
+        .overlay-header {
+          height: 52px;
+          padding: 0 16px;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <main class="frame">
+      <div class="overlay-content">
+        <header class="overlay-header">
+          <img class="header-logo" src="/factchecker-icon.svg" alt="Fact Checker" />
+          <h1 class="header-title">FACT CHECKER</h1>
+          <span class="header-badge">BETA</span>
+        </header>
+        <section class="stack" id="stack"></section>
+      </div>
+    </main>
+
+    <script>
+      const claims = new Map();
+      const stack = document.getElementById('stack');
+      const pageUrl = new URL(window.location.href);
+      const state = {
+        authRequired: false,
+        readAuthRequired: false,
+        controlPassword: pageUrl.searchParams.get('control_password') || '',
+        source: null
+      };
+
+      /* Position the frame based on URL param */
+      const position = pageUrl.searchParams.get('position') || 'bottom-left';
+      const frame = document.querySelector('.frame');
+      frame.className = `frame ${position}`;
+
+      /* Verdict SVG icons */
+      const VERDICT_ICONS = {
+        supported: '<svg class="verdict-icon" viewBox="0 0 20 20" fill="#00C565"><path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.857-9.809a.75.75 0 00-1.214-.882l-3.483 4.79-1.88-1.88a.75.75 0 10-1.06 1.061l2.5 2.5a.75.75 0 001.137-.089l4-5.5z" clip-rule="evenodd"/></svg>',
+        false: '<svg class="verdict-icon" viewBox="0 0 20 20" fill="#DC2626"><path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM8.28 7.22a.75.75 0 00-1.06 1.06L8.94 10l-1.72 1.72a.75.75 0 101.06 1.06L10 11.06l1.72 1.72a.75.75 0 101.06-1.06L11.06 10l1.72-1.72a.75.75 0 00-1.06-1.06L10 8.94 8.28 7.22z" clip-rule="evenodd"/></svg>',
+        misleading: '<svg class="verdict-icon" viewBox="0 0 20 20" fill="#D97706"><path fill-rule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-8-5a.75.75 0 01.75.75v4.5a.75.75 0 01-1.5 0v-4.5A.75.75 0 0110 5zm0 10a1 1 0 100-2 1 1 0 000 2z" clip-rule="evenodd"/></svg>',
+        unverified: '<svg class="verdict-icon" viewBox="0 0 20 20" fill="#6B7280"><path fill-rule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zM8.94 6.94a.75.75 0 11-1.061-1.061 3.75 3.75 0 015.304 5.304l-1.757 1.757a.75.75 0 01-1.06 0 .75.75 0 010-1.06l1.757-1.758a2.25 2.25 0 00-3.182-3.182zM10 15a1 1 0 100-2 1 1 0 000 2z" clip-rule="evenodd"/></svg>'
+      };
+
+      const VERDICT_LABELS = {
+        supported: 'CORRECT',
+        false: 'FALSE',
+        misleading: 'MISLEADING',
+        unverified: 'UNVERIFIED'
+      };
+
+      function eventTimeMs(value) {
+        if (!value) return null;
+        const parsed = Date.parse(value);
+        return Number.isFinite(parsed) ? parsed : null;
+      }
+
+      function normalizeVerdict(verdict) {
+        const val = (verdict || 'unverified').toLowerCase();
+        if (val === 'true') return 'supported';
+        if (val.includes('false')) return 'false';
+        if (val.includes('misleading')) return 'misleading';
+        if (val.includes('supported')) return 'supported';
+        return 'unverified';
+      }
+
+      function render() {
+        const rows = [...claims.values()]
+          .sort((a, b) => (b.updatedAt || '').localeCompare(a.updatedAt || ''))
+          .slice(0, 3);
+
+        stack.innerHTML = '';
+
+        for (let index = 0; index < rows.length; index++) {
+          const row = rows[index];
+          const displayVerdict = row.aiVerdict ?? row.verdict;
+          const verdict = normalizeVerdict(displayVerdict);
+
+          const showCorrection = (verdict === 'false' || verdict === 'misleading') && row.correctedClaim;
+
+          const card = document.createElement('article');
+          card.className = 'card';
+          card.style.animationDelay = `${index * 60}ms`;
+
+          card.innerHTML = `
+            <p class="claim-text">${escapeHtml(row.claim || '')}</p>
+            <div class="verdict-row">
+              ${VERDICT_ICONS[verdict] || VERDICT_ICONS.unverified}
+              <span class="verdict-label ${verdict}">${VERDICT_LABELS[verdict] || 'UNVERIFIED'}</span>
+            </div>
+            ${row.aiSummary ? `<p class="ai-summary-text">${escapeHtml(row.aiSummary)}</p>` : ''}
+            ${showCorrection ? `<div class="corrected-claim"><span class="corrected-label">ACTUAL:</span> ${escapeHtml(row.correctedClaim)}</div>` : ''}
+          `;
+
+          stack.appendChild(card);
+        }
+      }
+
+      function escapeHtml(input) {
+        return String(input ?? '')
+          .replace(/&/g, '&amp;')
+          .replace(/</g, '&lt;')
+          .replace(/>/g, '&gt;')
+          .replace(/"/g, '&quot;')
+          .replace(/'/g, '&#39;');
+      }
+
+      function upsertClaim(payload) {
+        const previous = claims.get(payload.claimId) || {};
+        const incomingTime = eventTimeMs(payload.at);
+        const previousTime = eventTimeMs(previous.updatedAt);
+        if (incomingTime !== null && previousTime !== null && incomingTime < previousTime) {
+          return;
+        }
+
+        claims.set(payload.claimId, {
+          ...previous,
+          claimId: payload.claimId,
+          claim: payload.claim ?? previous.claim,
+          status: payload.status ?? previous.status,
+          verdict: payload.verdict ?? previous.verdict,
+          confidence: payload.confidence ?? previous.confidence,
+          summary: payload.summary ?? previous.summary,
+          chunkStartClock: payload.chunkStartClock ?? previous.chunkStartClock,
+          updatedAt: payload.at ?? new Date().toISOString(),
+          correctedClaim: payload.correctedClaim ?? previous.correctedClaim ?? null,
+          aiSummary: payload.aiSummary ?? previous.aiSummary ?? null,
+          aiVerdict: payload.aiVerdict ?? previous.aiVerdict ?? null,
+          aiConfidence: payload.aiConfidence ?? previous.aiConfidence ?? null,
+          evidenceBasis: payload.evidenceBasis ?? previous.evidenceBasis ?? null
+        });
+        render();
+      }
+
+      function removeClaim(payload) {
+        const existing = claims.get(payload.claimId);
+        if (existing) {
+          const incomingTime = eventTimeMs(payload.at);
+          const previousTime = eventTimeMs(existing.updatedAt);
+          if (incomingTime !== null && previousTime !== null && incomingTime < previousTime) {
+            return;
+          }
+        }
+
+        claims.delete(payload.claimId);
+        render();
+      }
+
+      function withControlPassword(pathname) {
+        if (!state.controlPassword || !state.readAuthRequired) {
+          return pathname;
+        }
+
+        const separator = pathname.includes('?') ? '&' : '?';
+        return `${pathname}${separator}control_password=${encodeURIComponent(state.controlPassword)}`;
+      }
+
+      function connectEvents() {
+        if (state.source) {
+          state.source.close();
+        }
+
+        if (state.readAuthRequired && !state.controlPassword) {
+          return;
+        }
+
+        const source = new EventSource(withControlPassword('/events'));
+        state.source = source;
+        source.addEventListener('claim.output_approved', (e) => upsertClaim(JSON.parse(e.data)));
+        source.addEventListener('claim.output_rejected', (e) => removeClaim(JSON.parse(e.data)));
+        source.addEventListener('claim.updated', (e) => {
+          const payload = JSON.parse(e.data);
+          if (payload.outputApprovalState === 'approved') {
+            upsertClaim(payload);
+            return;
+          }
+
+          removeClaim(payload);
+        });
+        source.addEventListener('pipeline.started', () => {
+          claims.clear();
+          render();
+        });
+      }
+
+      async function loadSnapshot() {
+        if (state.readAuthRequired && !state.controlPassword) {
+          claims.clear();
+          render();
+          return;
+        }
+
+        const res = await fetch(withControlPassword('/claims'));
+        const payload = await res.json().catch(() => ({}));
+        if (!res.ok) {
+          claims.clear();
+          render();
+          return;
+        }
+
+        claims.clear();
+        for (const claim of payload.claims || []) {
+          if (claim.outputApprovalState === 'approved') {
+            claims.set(claim.claimId, claim);
+          }
+        }
+        render();
+      }
+
+      Promise.all([fetch('/health'), fetch('/auth-status')])
+        .then(async ([healthRes, authStatusRes]) => {
+          const health = await healthRes.json();
+          const authStatus = await authStatusRes.json().catch(() => ({}));
+          state.authRequired = Boolean(authStatus.authRequired ?? health.authRequired);
+          state.readAuthRequired = Boolean(
+            authStatus.protectReadEndpoints ?? health.protectReadEndpoints
+          );
+
+          await loadSnapshot();
+          connectEvents();
+        })
+        .catch(() => {
+          render();
+        });
+
+      window.addEventListener('beforeunload', () => {
+        state.source?.close();
+      });
+    </script>
+  </body>
+</html>
