@@ -69,6 +69,7 @@ function generateOverlayKey(): string {
 export function createPipelineRegistry(options: PipelineRegistryOptions = {}): PipelineRegistry {
   const entries = new Map<string, PipelineEntry>();
   const overlayKeyIndex = new Map<string, string>(); // overlayKey -> pipelineId
+  const runIdIndex = new Map<string, string>(); // runId -> pipelineId
 
   function start(pipelineId: string, config: PipelineConfig): PipelineEntry {
     const existing = entries.get(pipelineId);
@@ -79,6 +80,7 @@ export function createPipelineRegistry(options: PipelineRegistryOptions = {}): P
     // Clean up old entry if it exists
     if (existing) {
       overlayKeyIndex.delete(existing.overlayKey);
+      runIdIndex.delete(existing.runId);
     }
 
     const overlayKey = generateOverlayKey();
@@ -95,7 +97,7 @@ export function createPipelineRegistry(options: PipelineRegistryOptions = {}): P
       pipeline,
       runId: pipeline.runId,
       overlayKey,
-      youtubeUrl: config.youtubeUrl ?? null,
+      youtubeUrl: config.source?.url ?? null,
       outputPackageService,
       renderService,
       createdAt: new Date().toISOString(),
@@ -103,12 +105,14 @@ export function createPipelineRegistry(options: PipelineRegistryOptions = {}): P
 
     entries.set(pipelineId, entry);
     overlayKeyIndex.set(overlayKey, pipelineId);
+    runIdIndex.set(pipeline.runId, pipelineId);
 
     try {
       pipeline.start();
     } catch (error) {
       entries.delete(pipelineId);
       overlayKeyIndex.delete(overlayKey);
+      runIdIndex.delete(pipeline.runId);
       throw error;
     }
 
@@ -138,10 +142,9 @@ export function createPipelineRegistry(options: PipelineRegistryOptions = {}): P
   }
 
   function getByRunId(runId: string): PipelineEntry | undefined {
-    for (const entry of entries.values()) {
-      if (entry.runId === runId) return entry;
-    }
-    return undefined;
+    const pipelineId = runIdIndex.get(runId);
+    if (!pipelineId) return undefined;
+    return entries.get(pipelineId);
   }
 
   function list(): PipelineEntry[] {
@@ -157,6 +160,7 @@ export function createPipelineRegistry(options: PipelineRegistryOptions = {}): P
     if (!entry) return false;
     if (entry.pipeline.isRunning()) return false;
     overlayKeyIndex.delete(entry.overlayKey);
+    runIdIndex.delete(entry.runId);
     entries.delete(pipelineId);
     return true;
   }

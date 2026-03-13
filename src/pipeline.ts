@@ -1,4 +1,3 @@
-import { spawn, type ChildProcess } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 
 import { detectClaims } from './claim-detector.js';
@@ -7,10 +6,11 @@ import { lookupFredEvidence } from './fred-client.js';
 import { lookupCongressEvidence } from './congress-client.js';
 import { verifyClaim } from './gemini-verifier.js';
 import { pcm16ToWav } from './wav.js';
-import { clockTime, parsePositiveInt, parseNonNegativeInt } from './utils.js';
-import type { PipelineConfig, PipelineInstance, PipelineStatus, IngestExitInfo, PipelineEvent, EvidenceState, GeminiCandidate } from './types.js';
+import { clockTime } from './utils.js';
+import { createYtdlpSource } from './ingest/ytdlp-source.js';
+import type { PipelineConfig, PipelineInstance, PipelineStatus, PipelineEvent, EvidenceState, GeminiCandidate, IngestSource } from './types.js';
 import {
-  INGEST_SAMPLE_RATE, INGEST_CHANNELS, INGEST_BYTES_PER_SAMPLE, INGEST_CLOSE_WAIT_MS,
+  INGEST_SAMPLE_RATE, INGEST_CHANNELS, INGEST_BYTES_PER_SAMPLE,
   CLAIM_CARRYOVER_MAX_CHARS, CLAIM_FALLBACK_FLUSH_CHARS,
   CLAIM_RECENT_DEDUPE_TTL_MS, CLAIM_RECENT_DEDUPE_MAX,
   TRANSCRIPT_CONTEXT_CHARS, TRANSCRIPT_FLUSH_MAX_CHARS, TRANSCRIPT_FLUSH_TIMEOUT_MS,
@@ -20,7 +20,6 @@ import {
 const SAMPLE_RATE = INGEST_SAMPLE_RATE;
 const CHANNELS = INGEST_CHANNELS;
 const BYTES_PER_SAMPLE = INGEST_BYTES_PER_SAMPLE;
-const CLOSE_WAIT_MS = INGEST_CLOSE_WAIT_MS;
 
 function splitCompleteSentencesWithCarryover(text: string): { completeText: string; carryover: string } {
   const normalized = String(text ?? '').replace(/\s+/g, ' ').trim();
@@ -138,22 +137,9 @@ async function transcribePcmChunk(pcmChunk: Buffer, options: { apiKey: string; m
   return text;
 }
 
-interface IngestAttempt {
-  startedAtMs: number;
-  lastAudioByteAtMs: number;
-  ytdlp: ChildProcess | null;
-  ffmpeg: ChildProcess | null;
-  ytdlpExit: { code: number | null; signal: string | null } | null;
-  ffmpegExit: { code: number | null; signal: string | null } | null;
-  processError: { stage: string; message: string } | null;
-  closeTimer: ReturnType<typeof setTimeout> | null;
-  teardownDone: boolean;
-  finalized: boolean;
-}
-
 export function createPipeline(options: PipelineConfig): PipelineInstance {
   const runId = randomUUID();
-  const youtubeUrl = options.youtubeUrl;
+  const sourceSpec = options.source;
   const onEvent = options.onEvent;
   const geminiApiKey = options.geminiApiKey;
   const geminiModel = options.geminiModel ?? 'gemini-2.5-flash';
@@ -163,12 +149,6 @@ export function createPipeline(options: PipelineConfig): PipelineInstance {
   const congressApiKey = options.congressApiKey;
   const chunkSeconds = Math.max(5, Math.min(30, options.chunkSeconds ?? 15));
   const maxResearchConcurrency = Math.max(1, Math.min(10, Number(options.maxResearchConcurrency ?? 3)));
-  const ingestReconnectEnabled = options.ingestReconnectEnabled === undefined ? true : Boolean(options.ingestReconnectEnabled);
-  const ingestMaxRetries = parseNonNegativeInt(options.ingestMaxRetries, 0, 10000);
-  const ingestRetryBaseMs = parsePositiveInt(options.ingestRetryBaseMs, 1000, 120000);
-  const ingestRetryMaxMs = Math.max(ingestRetryBaseMs, parsePositiveInt(options.ingestRetryMaxMs, 15000, 600000));
-  const ingestStallTimeoutMs = parsePositiveInt(options.ingestStallTimeoutMs, 45000, 300000);
-  const ingestVerboseLogs = Boolean(options.ingestVerboseLogs);
   const claimDetectionThreshold = Math.max(0.55, Math.min(0.9, Number(options.claimDetectionThreshold ?? 0.62)));
   const speechContext = options.speechContext ?? '';
   const operatorNotes = options.operatorNotes ?? '';
@@ -176,21 +156,10 @@ export function createPipeline(options: PipelineConfig): PipelineInstance {
   const chunkBytes = chunkSeconds * SAMPLE_RATE * CHANNELS * BYTES_PER_SAMPLE;
 
   let running = false;
-  let state = 'idle';
-  let ytdlpProc: ChildProcess | null = null;
-  let ffmpegProc: ChildProcess | null = null;
   let bufferedAudio = Buffer.alloc(0);
   let chunkIndex = 0;
   let claimIndex = 0;
-  let reconnectAttempt = 0;
-  let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
-  let stallWatchdog: ReturnType<typeof setInterval> | null = null;
   let finalStopEmitted = false;
-  let manualStopRequested = false;
-  let currentAttempt: IngestAttempt | null = null;
-  let reconnectSuccessPending = false;
-  let lastIngestExit: IngestExitInfo | null = null;
-  let lastIngestEventAt: string | null = null;
   let claimSentenceCarryover = '';
   let previousTranscriptTail = '';
   let transcriptAccumulator = '';
@@ -211,48 +180,10 @@ export function createPipeline(options: PipelineConfig): PipelineInstance {
   const researchQueue: ResearchQueueItem[] = [];
   let transcribing = false;
   let researchInFlight = 0;
+  let ingestSource: IngestSource | null = null;
 
   function emit(type: string, payload: Record<string, unknown> = {}): void {
     onEvent?.({ type, runId, at: new Date().toISOString(), ...payload } as PipelineEvent);
-  }
-
-  function updateLastIngestEvent(): void { lastIngestEventAt = new Date().toISOString(); }
-  function isCurrentAttemptFn(attempt: IngestAttempt | null): boolean { return Boolean(attempt && currentAttempt === attempt); }
-  function clearReconnectTimer(): void { if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; } }
-  function clearCloseTimer(attempt: IngestAttempt): void { if (attempt?.closeTimer) { clearTimeout(attempt.closeTimer); attempt.closeTimer = null; } }
-  function clearStallWatchdog(): void { if (stallWatchdog) { clearInterval(stallWatchdog); stallWatchdog = null; } }
-
-  function killProcessGracefully(proc: ChildProcess | null): void {
-    if (!proc || proc.killed) return;
-    try { proc.kill('SIGTERM'); } catch { return; }
-    const timeout = setTimeout(() => { if (proc.exitCode === null && proc.signalCode === null) { try { proc.kill('SIGKILL'); } catch { /* noop */ } } }, 2000);
-    if (typeof timeout.unref === 'function') timeout.unref();
-  }
-
-  function teardownAttempt(attempt: IngestAttempt): void {
-    if (!attempt || attempt.teardownDone) return;
-    attempt.teardownDone = true;
-    try { if (attempt.ytdlp?.stdout && attempt.ffmpeg?.stdin) attempt.ytdlp.stdout.unpipe(attempt.ffmpeg.stdin); } catch { /* noop */ }
-    try { if (attempt.ffmpeg?.stdin && !attempt.ffmpeg.stdin.destroyed) attempt.ffmpeg.stdin.end(); } catch { /* noop */ }
-    killProcessGracefully(attempt.ytdlp);
-    killProcessGracefully(attempt.ffmpeg);
-  }
-
-  function snapshotLastExit(attempt: IngestAttempt): void {
-    lastIngestExit = {
-      ytdlpCode: attempt?.ytdlpExit?.code ?? null,
-      ytdlpSignal: attempt?.ytdlpExit?.signal ?? null,
-      ffmpegCode: attempt?.ffmpegExit?.code ?? null,
-      ffmpegSignal: attempt?.ffmpegExit?.signal ?? null,
-    };
-    updateLastIngestEvent();
-  }
-
-  function computeReconnectDelayMs(attemptNo: number): number {
-    const exponent = Math.max(0, attemptNo - 1);
-    const backoff = Math.min(ingestRetryMaxMs, ingestRetryBaseMs * 2 ** exponent);
-    const jitter = Math.floor(Math.random() * Math.min(500, Math.max(80, backoff * 0.2)));
-    return Math.max(250, backoff + jitter);
   }
 
   function pruneRecentClaimKeys(nowMs: number): void {
@@ -314,83 +245,21 @@ export function createPipeline(options: PipelineConfig): PipelineInstance {
     transcriptFlushTimer = setTimeout(() => { transcriptFlushTimer = null; flushTranscriptSegment(false); }, TRANSCRIPT_FLUSH_TIMEOUT_MS);
   }
 
-  function classifyAttemptResult(attempt: IngestAttempt, hint: string | null = null): string {
-    if (hint === 'process_error' || attempt?.processError) return 'process_error';
-    const ytdlpCode = attempt?.ytdlpExit?.code;
-    const ffmpegCode = attempt?.ffmpegExit?.code;
-    const ytdlpSignal = attempt?.ytdlpExit?.signal;
-    const ffmpegSignal = attempt?.ffmpegExit?.signal;
-    const hasSignal = Boolean(ytdlpSignal || ffmpegSignal);
-    const hasNonZero = [ytdlpCode, ffmpegCode].some((code) => Number.isInteger(code) && code !== 0);
-    if (!hasSignal && !hasNonZero && ytdlpCode === 0 && ffmpegCode === 0) return 'source_ended';
-    return 'upstream_exit_nonzero';
-  }
-
   function finalizeStop(reason = 'manual_stop'): void {
     if (finalStopEmitted) return;
     finalStopEmitted = true;
     running = false;
-    state = 'stopping';
     flushTranscriptSegment(true);
     if (transcriptFlushTimer) { clearTimeout(transcriptFlushTimer); transcriptFlushTimer = null; }
     previousTranscriptTail = ''; transcriptAccumulator = '';
     transcriptAccStartSec = null; transcriptAccStartClock = null; transcriptAccEndSec = null; transcriptAccEndClock = null;
     transcriptSegmentIndex = 0;
-    clearReconnectTimer(); clearStallWatchdog();
     abortController.abort();
-    if (currentAttempt) teardownAttempt(currentAttempt);
-    currentAttempt = null; ytdlpProc = null; ffmpegProc = null;
     bufferedAudio = Buffer.alloc(0);
     transcriptionQueue.length = 0; researchQueue.length = 0;
     claimSentenceCarryover = ''; recentClaimKeys.clear();
-    state = 'stopped';
-    emit('pipeline.stopped', { reason, reconnectAttempt, lastIngestExit });
-  }
-
-  function scheduleReconnect(resultReason: string, _attempt: IngestAttempt): void {
-    if (!running || manualStopRequested || state === 'stopping' || state === 'stopped') return;
-    if (!ingestReconnectEnabled) { finalizeStop(resultReason === 'source_ended' ? 'source_ended' : 'upstream_exit_nonzero'); return; }
-    reconnectAttempt += 1;
-    if (ingestMaxRetries > 0 && reconnectAttempt > ingestMaxRetries) { finalizeStop('reconnect_exhausted'); return; }
-    const delayMs = computeReconnectDelayMs(reconnectAttempt);
-    state = 'reconnecting'; reconnectSuccessPending = true;
-    emit('pipeline.reconnect_scheduled', { attempt: reconnectAttempt, delayMs, reason: resultReason, ...lastIngestExit });
-    clearReconnectTimer();
-    reconnectTimer = setTimeout(() => {
-      reconnectTimer = null;
-      if (!running || manualStopRequested || state === 'stopping' || state === 'stopped') return;
-      emit('pipeline.reconnect_started', { attempt: reconnectAttempt, reason: resultReason });
-      startIngestAttempt();
-    }, delayMs);
-  }
-
-  function finalizeAttempt(attempt: IngestAttempt, hint: string | null = null): void {
-    if (!attempt || attempt.finalized) return;
-    attempt.finalized = true;
-    clearCloseTimer(attempt);
-    if (isCurrentAttemptFn(attempt)) { currentAttempt = null; ytdlpProc = null; ffmpegProc = null; }
-    snapshotLastExit(attempt);
-    if (!running || manualStopRequested || state === 'stopping' || state === 'stopped') return;
-    const resultReason = classifyAttemptResult(attempt, hint);
-    scheduleReconnect(resultReason, attempt);
-  }
-
-  function onProcessClose(attempt: IngestAttempt, stage: string, code: number | null, signal: string | null): void {
-    if (!attempt || attempt.finalized) return;
-    if (stage === 'yt-dlp') attempt.ytdlpExit = { code, signal };
-    else attempt.ffmpegExit = { code, signal };
-    emit('pipeline.log', { stage, message: `${stage} exited with code=${code} signal=${signal}` });
-    if (attempt.ytdlpExit && attempt.ffmpegExit) { finalizeAttempt(attempt); return; }
-    clearCloseTimer(attempt);
-    attempt.closeTimer = setTimeout(() => { finalizeAttempt(attempt); }, CLOSE_WAIT_MS);
-  }
-
-  function onProcessError(attempt: IngestAttempt, stage: string, error: Error): void {
-    if (!attempt || attempt.finalized) return;
-    attempt.processError = { stage, message: error.message };
-    emit('pipeline.error', { stage, message: error.message });
-    teardownAttempt(attempt);
-    finalizeAttempt(attempt, 'process_error');
+    const ingestStatus = ingestSource?.getStatus();
+    emit('pipeline.stopped', { reason, reconnectAttempt: ingestStatus?.reconnectAttempt ?? 0, lastIngestExit: ingestStatus?.lastExitInfo ?? null });
   }
 
   function isAborted(): boolean { return !running || abortController.signal.aborted; }
@@ -570,94 +439,68 @@ export function createPipeline(options: PipelineConfig): PipelineInstance {
     }
   }
 
-  function startIngestAttempt(): void {
-    if (!running || state === 'stopping' || state === 'stopped') return;
-    clearReconnectTimer(); bufferedAudio = Buffer.alloc(0);
-    flushTranscriptSegment(true); previousTranscriptTail = '';
-
-    const attempt: IngestAttempt = {
-      startedAtMs: Date.now(), lastAudioByteAtMs: Date.now(),
-      ytdlp: null, ffmpeg: null, ytdlpExit: null, ffmpegExit: null,
-      processError: null, closeTimer: null, teardownDone: false, finalized: false,
-    };
-
-    const ytdlpArgs = ['-f', 'bestaudio', '--no-live-from-start', '-R', 'infinite', '--fragment-retries', 'infinite', '--extractor-retries', 'infinite', '--retry-sleep', 'http:exp=1:20', '--retry-sleep', 'fragment:exp=1:20', '-o', '-', youtubeUrl];
-    if (ingestVerboseLogs) { ytdlpArgs.unshift('--newline'); ytdlpArgs.unshift('-v'); }
-    else { ytdlpArgs.unshift('--no-progress'); ytdlpArgs.unshift('--no-warnings'); ytdlpArgs.unshift('--quiet'); }
-
-    let nextYtdlpProc: ChildProcess;
-    try { nextYtdlpProc = spawn('yt-dlp', ytdlpArgs, { stdio: ['ignore', 'pipe', 'pipe'] }); }
-    catch (error) { emit('pipeline.error', { stage: 'yt-dlp', message: `Failed to start yt-dlp: ${(error as Error).message}` }); finalizeStop('process_error'); return; }
-
-    let nextFfmpegProc: ChildProcess;
-    try {
-      nextFfmpegProc = spawn('ffmpeg', ['-hide_banner', '-loglevel', 'error', '-fflags', '+discardcorrupt', '-i', 'pipe:0', '-f', 's16le', '-ac', String(CHANNELS), '-ar', String(SAMPLE_RATE), 'pipe:1'], { stdio: ['pipe', 'pipe', 'pipe'] });
-    } catch (error) { killProcessGracefully(nextYtdlpProc); emit('pipeline.error', { stage: 'ffmpeg', message: `Failed to start ffmpeg: ${(error as Error).message}` }); finalizeStop('process_error'); return; }
-
-    attempt.ytdlp = nextYtdlpProc; attempt.ffmpeg = nextFfmpegProc;
-    currentAttempt = attempt; ytdlpProc = nextYtdlpProc; ffmpegProc = nextFfmpegProc;
-    state = 'running'; updateLastIngestEvent();
-
-    nextYtdlpProc.stdout!.pipe(nextFfmpegProc.stdin!);
-    nextFfmpegProc.stdin!.on('error', () => {}); nextYtdlpProc.stdout!.on('error', () => {}); nextFfmpegProc.stdout!.on('error', () => {}); nextYtdlpProc.stderr!.on('error', () => {}); nextFfmpegProc.stderr!.on('error', () => {});
-    nextYtdlpProc.stderr!.on('data', (chunk: Buffer) => { if (!isCurrentAttemptFn(attempt)) return; const message = chunk.toString().trim(); if (message) emit('pipeline.log', { stage: 'yt-dlp', message }); });
-    nextFfmpegProc.stderr!.on('data', (chunk: Buffer) => { if (!isCurrentAttemptFn(attempt)) return; const message = chunk.toString().trim(); if (message) emit('pipeline.log', { stage: 'ffmpeg', message }); });
-    nextYtdlpProc.on('error', (error: Error) => { if (!isCurrentAttemptFn(attempt)) return; onProcessError(attempt, 'yt-dlp', error); });
-    nextFfmpegProc.on('error', (error: Error) => { if (!isCurrentAttemptFn(attempt)) return; onProcessError(attempt, 'ffmpeg', error); });
-    nextYtdlpProc.on('close', (code: number | null, signal: string | null) => { if (!isCurrentAttemptFn(attempt) && !attempt.finalized) return; onProcessClose(attempt, 'yt-dlp', code, signal); });
-    nextFfmpegProc.on('close', (code: number | null, signal: string | null) => { if (!isCurrentAttemptFn(attempt) && !attempt.finalized) return; onProcessClose(attempt, 'ffmpeg', code, signal); });
-    nextFfmpegProc.stdout!.on('data', (audioData: Buffer) => {
-      if (!isCurrentAttemptFn(attempt) || !running) return;
-      attempt.lastAudioByteAtMs = Date.now(); updateLastIngestEvent();
-      if (reconnectSuccessPending) { emit('pipeline.reconnect_succeeded', { attempt: reconnectAttempt }); reconnectSuccessPending = false; reconnectAttempt = 0; }
-      handleAudioData(audioData);
-    });
-  }
-
-  function startStallWatchdog(): void {
-    clearStallWatchdog();
-    stallWatchdog = setInterval(() => {
-      if (!running || state !== 'running') return;
-      const attempt = currentAttempt;
-      if (!attempt || attempt.finalized) return;
-      const idleMs = Date.now() - attempt.lastAudioByteAtMs;
-      if (idleMs < ingestStallTimeoutMs) return;
-      emit('pipeline.ingest_stalled', { idleMs, thresholdMs: ingestStallTimeoutMs, reconnectAttempt });
-      attempt.processError = { stage: 'ingest', message: `No audio bytes received for ${idleMs}ms` };
-      teardownAttempt(attempt); finalizeAttempt(attempt, 'process_error');
-      if (transcriptionQueue.length > 3 && transcribing) {
-        emit('pipeline.warning', { stage: 'transcription_queue', message: `Transcription queue depth=${transcriptionQueue.length} while transcribing=${transcribing}`, queueDepth: transcriptionQueue.length });
-      }
-      if (transcriptionQueue.length > 10 && transcribing) {
-        emit('pipeline.warning', { stage: 'transcription_queue', message: `Force-resetting transcription mutex (queue depth=${transcriptionQueue.length})`, queueDepth: transcriptionQueue.length });
-        transcribing = false;
-        drainTranscriptionQueue().catch((err) => { emit('pipeline.error', { stage: 'transcription_drain', message: `Transcription drain failed after mutex reset: ${(err as Error).message}` }); });
-      }
-    }, 2000);
-    if (typeof stallWatchdog.unref === 'function') stallWatchdog.unref();
-  }
-
   function start(): void {
     if (running) throw new Error('Pipeline is already running');
     if (abortController.signal.aborted) throw new Error('Pipeline cannot be restarted after stop; create a new pipeline instance.');
     if (!geminiApiKey) throw new Error('GEMINI_API_KEY is required for transcription');
-    running = true; state = 'running'; finalStopEmitted = false; manualStopRequested = false;
-    reconnectAttempt = 0; reconnectSuccessPending = false; lastIngestExit = null; updateLastIngestEvent();
+    running = true; finalStopEmitted = false;
     claimSentenceCarryover = ''; recentClaimKeys.clear(); previousTranscriptTail = '';
     transcriptAccumulator = ''; transcriptAccStartSec = null; transcriptAccStartClock = null;
     transcriptAccEndSec = null; transcriptAccEndClock = null; transcriptSegmentIndex = 0;
-    emit('pipeline.started', { youtubeUrl, chunkSeconds, model: geminiModel, maxResearchConcurrency, claimDetectionThreshold, ingestReconnectEnabled, ingestMaxRetries, ingestRetryBaseMs, ingestRetryMaxMs, ingestStallTimeoutMs });
-    startStallWatchdog(); startIngestAttempt();
+
+    ingestSource = createYtdlpSource({
+      youtubeUrl: sourceSpec.url,
+      callbacks: {
+        onData: handleAudioData,
+        onEnd: finalizeStop,
+        onLog: (type, payload) => {
+          emit(type, payload);
+          if (type === 'pipeline.ingest_stalled') {
+            if (transcriptionQueue.length > 3 && transcribing) {
+              emit('pipeline.warning', { stage: 'transcription_queue', message: `Transcription queue depth=${transcriptionQueue.length} while transcribing=${transcribing}`, queueDepth: transcriptionQueue.length });
+            }
+            if (transcriptionQueue.length > 10 && transcribing) {
+              emit('pipeline.warning', { stage: 'transcription_queue', message: `Force-resetting transcription mutex (queue depth=${transcriptionQueue.length})`, queueDepth: transcriptionQueue.length });
+              transcribing = false;
+              drainTranscriptionQueue().catch((err) => { emit('pipeline.error', { stage: 'transcription_drain', message: `Transcription drain failed after mutex reset: ${(err as Error).message}` }); });
+            }
+          }
+        },
+        onReconnect: () => {
+          bufferedAudio = Buffer.alloc(0);
+          flushTranscriptSegment(true);
+          previousTranscriptTail = '';
+        },
+      },
+      reconnectEnabled: options.ingestReconnectEnabled,
+      maxRetries: options.ingestMaxRetries,
+      retryBaseMs: options.ingestRetryBaseMs,
+      retryMaxMs: options.ingestRetryMaxMs,
+      stallTimeoutMs: options.ingestStallTimeoutMs,
+      verboseLogs: options.ingestVerboseLogs,
+    });
+
+    emit('pipeline.started', { youtubeUrl: sourceSpec.url, chunkSeconds, model: geminiModel, maxResearchConcurrency, claimDetectionThreshold, ingestReconnectEnabled: options.ingestReconnectEnabled ?? true, ingestMaxRetries: options.ingestMaxRetries ?? 0, ingestRetryBaseMs: options.ingestRetryBaseMs ?? 1000, ingestRetryMaxMs: options.ingestRetryMaxMs ?? 15000, ingestStallTimeoutMs: options.ingestStallTimeoutMs ?? 45000 });
+    ingestSource.start();
   }
 
   function stop(reason = 'manual_stop'): void {
     const normalizedReason = String(reason ?? 'manual_stop').trim() || 'manual_stop';
-    if (normalizedReason === 'manual_stop' || normalizedReason === 'user_requested_stop') manualStopRequested = true;
+    ingestSource?.stop(normalizedReason);
     finalizeStop(normalizedReason);
   }
 
   function getStatus(): PipelineStatus {
-    return { running, ingestState: running ? state : 'stopped', reconnectAttempt, reconnectEnabled: ingestReconnectEnabled, maxRetries: ingestMaxRetries, lastIngestExit, lastIngestEventAt };
+    const ingest = ingestSource?.getStatus();
+    return {
+      running,
+      ingestState: ingest?.state ?? (running ? 'idle' : 'stopped'),
+      reconnectAttempt: ingest?.reconnectAttempt ?? 0,
+      reconnectEnabled: ingest?.reconnectEnabled ?? true,
+      maxRetries: ingest?.maxRetries ?? 0,
+      lastIngestExit: ingest?.lastExitInfo ?? null,
+      lastIngestEventAt: ingest?.lastEventAt ?? null,
+    };
   }
 
   return { runId, start, stop, isRunning: () => running, getStatus };

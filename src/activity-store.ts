@@ -112,6 +112,52 @@ export function createActivityStore(options: { databaseUrl?: string; onError?: (
     return initializing;
   }
 
+  async function executeItem(client: import('pg').PoolClient, item: QueueItem): Promise<void> {
+    if (item.kind === 'event') {
+      const event = item.payload;
+      await client.query(
+        `INSERT INTO activity_events (created_at, run_id, seq, event_type, claim_id, organization_id, payload) VALUES (COALESCE($1::timestamptz, NOW()), $2, $3, $4, $5, $6, $7::jsonb)`,
+        [event.at ?? item.enqueuedAt, event.runId ?? null, event.seq ?? null, event.type ?? 'unknown', event.claimId ?? null, event.organizationId ?? 'default', JSON.stringify(event)]
+      );
+    } else if (item.kind === 'action') {
+      const action = item.payload;
+      await client.query(
+        `INSERT INTO claim_actions (created_at, run_id, claim_id, action, actor_id, reason, expected_version, result, organization_id, payload) VALUES (COALESCE($1::timestamptz, NOW()), $2, $3, $4, $5, $6, $7, $8, $9, $10::jsonb)`,
+        [action.at ?? item.enqueuedAt, action.runId ?? null, action.claimId, action.action, action.actorId ?? null, action.reason ?? null, Number.isInteger(action.expectedVersion) ? action.expectedVersion : null, action.result ?? 'unknown', action.organizationId ?? 'default', JSON.stringify(action)]
+      );
+    } else if (item.kind === 'run_start') {
+      const run = item.payload;
+      await client.query(
+        `INSERT INTO runs (run_id, youtube_url, chunk_seconds, model, started_at, organization_id, payload) VALUES ($1, $2, $3, $4, COALESCE($5::timestamptz, NOW()), $6, $7::jsonb) ON CONFLICT (run_id) DO UPDATE SET youtube_url = EXCLUDED.youtube_url, chunk_seconds = EXCLUDED.chunk_seconds, model = EXCLUDED.model, organization_id = EXCLUDED.organization_id, payload = EXCLUDED.payload`,
+        [run.runId, run.youtubeUrl ?? null, Number.isInteger(run.chunkSeconds) ? run.chunkSeconds : null, run.model ?? null, run.startedAt ?? run.at ?? item.enqueuedAt, run.organizationId ?? 'default', JSON.stringify(run)]
+      );
+    } else if (item.kind === 'run_stop') {
+      const run = item.payload;
+      await client.query(
+        `INSERT INTO runs (run_id, stopped_at, stop_reason, organization_id, payload) VALUES ($1, COALESCE($2::timestamptz, NOW()), $3, $4, $5::jsonb) ON CONFLICT (run_id) DO UPDATE SET stopped_at = EXCLUDED.stopped_at, stop_reason = EXCLUDED.stop_reason, payload = runs.payload || EXCLUDED.payload`,
+        [run.runId, run.stoppedAt ?? run.at ?? item.enqueuedAt, run.reason ?? null, run.organizationId ?? 'default', JSON.stringify(run)]
+      );
+    } else if (item.kind === 'claim_snapshot') {
+      const claim = item.payload;
+      await client.query(
+        `INSERT INTO claims (claim_id, run_id, claim_text, status, verdict, confidence, claim_type_tag, version, output_approval_state, approved_version, approved_at, rejected_at, detected_at, updated_at, organization_id, payload) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,COALESCE($14::timestamptz, NOW()),$15,$16::jsonb) ON CONFLICT (claim_id) DO UPDATE SET run_id=EXCLUDED.run_id, claim_text=EXCLUDED.claim_text, status=EXCLUDED.status, verdict=EXCLUDED.verdict, confidence=EXCLUDED.confidence, claim_type_tag=EXCLUDED.claim_type_tag, version=EXCLUDED.version, output_approval_state=EXCLUDED.output_approval_state, approved_version=EXCLUDED.approved_version, approved_at=EXCLUDED.approved_at, rejected_at=EXCLUDED.rejected_at, detected_at=EXCLUDED.detected_at, updated_at=EXCLUDED.updated_at, organization_id=EXCLUDED.organization_id, payload=EXCLUDED.payload`,
+        [claim.claimId, claim.runId ?? null, claim.claim ?? '', claim.status ?? 'unknown', claim.verdict ?? 'unverified', Number(claim.confidence ?? 0), claim.claimTypeTag ?? 'other', Number.isInteger(claim.version) ? claim.version : 1, claim.outputApprovalState ?? 'pending', Number.isInteger(claim.approvedVersion) ? claim.approvedVersion : null, claim.approvedAt ?? null, claim.rejectedAt ?? null, claim.detectedAt ?? claim.updatedAt ?? null, claim.updatedAt ?? claim.at ?? item.enqueuedAt, claim.organizationId ?? 'default', JSON.stringify(claim)]
+      );
+    } else if (item.kind === 'output_package') {
+      const pkg = item.payload;
+      await client.query(
+        `INSERT INTO output_packages (package_id, claim_id, run_id, status, template_version, payload, error, organization_id, created_at, updated_at) VALUES ($1,$2,$3,$4,$5,$6::jsonb,$7,$8,COALESCE($9::timestamptz, NOW()),COALESCE($10::timestamptz, NOW())) ON CONFLICT (package_id) DO UPDATE SET status=EXCLUDED.status, template_version=EXCLUDED.template_version, payload=EXCLUDED.payload, error=EXCLUDED.error, organization_id=EXCLUDED.organization_id, updated_at=EXCLUDED.updated_at`,
+        [pkg.packageId, pkg.claimId, pkg.runId ?? null, pkg.status ?? 'unknown', pkg.templateVersion ?? null, JSON.stringify(pkg.payload ?? null), pkg.error ?? null, pkg.organizationId ?? 'default', pkg.createdAt ?? item.enqueuedAt, pkg.updatedAt ?? item.enqueuedAt]
+      );
+    } else if (item.kind === 'render_job') {
+      const job = item.payload;
+      await client.query(
+        `INSERT INTO render_jobs (render_job_id, claim_id, run_id, claim_version, idempotency_key, status, attempts, artifact_url, renderer_mode, job_payload, error, organization_id, created_at, updated_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10::jsonb,$11,$12,COALESCE($13::timestamptz, NOW()),COALESCE($14::timestamptz, NOW())) ON CONFLICT (render_job_id) DO UPDATE SET claim_version=EXCLUDED.claim_version, idempotency_key=EXCLUDED.idempotency_key, status=EXCLUDED.status, attempts=EXCLUDED.attempts, artifact_url=EXCLUDED.artifact_url, renderer_mode=EXCLUDED.renderer_mode, job_payload=EXCLUDED.job_payload, error=EXCLUDED.error, organization_id=EXCLUDED.organization_id, updated_at=EXCLUDED.updated_at`,
+        [job.renderJobId, job.claimId, job.runId ?? null, Number.isInteger(job.claimVersion) ? job.claimVersion : null, job.idempotencyKey ?? null, job.status ?? 'unknown', Number.isInteger(job.attempts) ? job.attempts : 0, job.artifactUrl ?? null, job.rendererMode ?? null, JSON.stringify(job.claim ?? null), job.error ?? null, job.organizationId ?? 'default', job.createdAt ?? item.enqueuedAt, job.updatedAt ?? item.enqueuedAt]
+      );
+    }
+  }
+
   async function flushQueue(): Promise<void> {
     if (flushing || queue.length === 0) return;
     if (!ready) {
@@ -121,69 +167,38 @@ export function createActivityStore(options: { databaseUrl?: string; onError?: (
 
     flushing = true;
     const batch = queue.splice(0, BATCH_SIZE);
-    let client: import('pg').PoolClient | null = null;
 
-    try {
-      client = await pool!.connect();
-      await client.query('BEGIN');
+    // Group by kind so each entity type flushes in its own transaction
+    const byKind = new Map<string, QueueItem[]>();
+    for (const item of batch) {
+      const group = byKind.get(item.kind);
+      if (group) group.push(item);
+      else byKind.set(item.kind, [item]);
+    }
 
-      for (const item of batch) {
-        if (item.kind === 'event') {
-          const event = item.payload;
-          await client.query(
-            `INSERT INTO activity_events (created_at, run_id, seq, event_type, claim_id, organization_id, payload) VALUES (COALESCE($1::timestamptz, NOW()), $2, $3, $4, $5, $6, $7::jsonb)`,
-            [event.at ?? item.enqueuedAt, event.runId ?? null, event.seq ?? null, event.type ?? 'unknown', event.claimId ?? null, event.organizationId ?? 'default', JSON.stringify(event)]
-          );
-        } else if (item.kind === 'action') {
-          const action = item.payload;
-          await client.query(
-            `INSERT INTO claim_actions (created_at, run_id, claim_id, action, actor_id, reason, expected_version, result, organization_id, payload) VALUES (COALESCE($1::timestamptz, NOW()), $2, $3, $4, $5, $6, $7, $8, $9, $10::jsonb)`,
-            [action.at ?? item.enqueuedAt, action.runId ?? null, action.claimId, action.action, action.actorId ?? null, action.reason ?? null, Number.isInteger(action.expectedVersion) ? action.expectedVersion : null, action.result ?? 'unknown', action.organizationId ?? 'default', JSON.stringify(action)]
-          );
-        } else if (item.kind === 'run_start') {
-          const run = item.payload;
-          await client.query(
-            `INSERT INTO runs (run_id, youtube_url, chunk_seconds, model, started_at, organization_id, payload) VALUES ($1, $2, $3, $4, COALESCE($5::timestamptz, NOW()), $6, $7::jsonb) ON CONFLICT (run_id) DO UPDATE SET youtube_url = EXCLUDED.youtube_url, chunk_seconds = EXCLUDED.chunk_seconds, model = EXCLUDED.model, organization_id = EXCLUDED.organization_id, payload = EXCLUDED.payload`,
-            [run.runId, run.youtubeUrl ?? null, Number.isInteger(run.chunkSeconds) ? run.chunkSeconds : null, run.model ?? null, run.startedAt ?? run.at ?? item.enqueuedAt, run.organizationId ?? 'default', JSON.stringify(run)]
-          );
-        } else if (item.kind === 'run_stop') {
-          const run = item.payload;
-          await client.query(
-            `INSERT INTO runs (run_id, stopped_at, stop_reason, organization_id, payload) VALUES ($1, COALESCE($2::timestamptz, NOW()), $3, $4, $5::jsonb) ON CONFLICT (run_id) DO UPDATE SET stopped_at = EXCLUDED.stopped_at, stop_reason = EXCLUDED.stop_reason, payload = runs.payload || EXCLUDED.payload`,
-            [run.runId, run.stoppedAt ?? run.at ?? item.enqueuedAt, run.reason ?? null, run.organizationId ?? 'default', JSON.stringify(run)]
-          );
-        } else if (item.kind === 'claim_snapshot') {
-          const claim = item.payload;
-          await client.query(
-            `INSERT INTO claims (claim_id, run_id, claim_text, status, verdict, confidence, claim_type_tag, version, output_approval_state, approved_version, approved_at, rejected_at, detected_at, updated_at, organization_id, payload) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,COALESCE($14::timestamptz, NOW()),$15,$16::jsonb) ON CONFLICT (claim_id) DO UPDATE SET run_id=EXCLUDED.run_id, claim_text=EXCLUDED.claim_text, status=EXCLUDED.status, verdict=EXCLUDED.verdict, confidence=EXCLUDED.confidence, claim_type_tag=EXCLUDED.claim_type_tag, version=EXCLUDED.version, output_approval_state=EXCLUDED.output_approval_state, approved_version=EXCLUDED.approved_version, approved_at=EXCLUDED.approved_at, rejected_at=EXCLUDED.rejected_at, detected_at=EXCLUDED.detected_at, updated_at=EXCLUDED.updated_at, organization_id=EXCLUDED.organization_id, payload=EXCLUDED.payload`,
-            [claim.claimId, claim.runId ?? null, claim.claim ?? '', claim.status ?? 'unknown', claim.verdict ?? 'unverified', Number(claim.confidence ?? 0), claim.claimTypeTag ?? 'other', Number.isInteger(claim.version) ? claim.version : 1, claim.outputApprovalState ?? 'pending', Number.isInteger(claim.approvedVersion) ? claim.approvedVersion : null, claim.approvedAt ?? null, claim.rejectedAt ?? null, claim.detectedAt ?? claim.updatedAt ?? null, claim.updatedAt ?? claim.at ?? item.enqueuedAt, claim.organizationId ?? 'default', JSON.stringify(claim)]
-          );
-        } else if (item.kind === 'output_package') {
-          const pkg = item.payload;
-          await client.query(
-            `INSERT INTO output_packages (package_id, claim_id, run_id, status, template_version, payload, error, organization_id, created_at, updated_at) VALUES ($1,$2,$3,$4,$5,$6::jsonb,$7,$8,COALESCE($9::timestamptz, NOW()),COALESCE($10::timestamptz, NOW())) ON CONFLICT (package_id) DO UPDATE SET status=EXCLUDED.status, template_version=EXCLUDED.template_version, payload=EXCLUDED.payload, error=EXCLUDED.error, organization_id=EXCLUDED.organization_id, updated_at=EXCLUDED.updated_at`,
-            [pkg.packageId, pkg.claimId, pkg.runId ?? null, pkg.status ?? 'unknown', pkg.templateVersion ?? null, JSON.stringify(pkg.payload ?? null), pkg.error ?? null, pkg.organizationId ?? 'default', pkg.createdAt ?? item.enqueuedAt, pkg.updatedAt ?? item.enqueuedAt]
-          );
-        } else if (item.kind === 'render_job') {
-          const job = item.payload;
-          await client.query(
-            `INSERT INTO render_jobs (render_job_id, claim_id, run_id, claim_version, idempotency_key, status, attempts, artifact_url, renderer_mode, job_payload, error, organization_id, created_at, updated_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10::jsonb,$11,$12,COALESCE($13::timestamptz, NOW()),COALESCE($14::timestamptz, NOW())) ON CONFLICT (render_job_id) DO UPDATE SET claim_version=EXCLUDED.claim_version, idempotency_key=EXCLUDED.idempotency_key, status=EXCLUDED.status, attempts=EXCLUDED.attempts, artifact_url=EXCLUDED.artifact_url, renderer_mode=EXCLUDED.renderer_mode, job_payload=EXCLUDED.job_payload, error=EXCLUDED.error, organization_id=EXCLUDED.organization_id, updated_at=EXCLUDED.updated_at`,
-            [job.renderJobId, job.claimId, job.runId ?? null, Number.isInteger(job.claimVersion) ? job.claimVersion : null, job.idempotencyKey ?? null, job.status ?? 'unknown', Number.isInteger(job.attempts) ? job.attempts : 0, job.artifactUrl ?? null, job.rendererMode ?? null, JSON.stringify(job.claim ?? null), job.error ?? null, job.organizationId ?? 'default', job.createdAt ?? item.enqueuedAt, job.updatedAt ?? item.enqueuedAt]
-          );
+    const failedItems: QueueItem[] = [];
+    for (const [, items] of byKind) {
+      let client: import('pg').PoolClient | null = null;
+      try {
+        client = await pool!.connect();
+        await client.query('BEGIN');
+        for (const item of items) {
+          await executeItem(client, item);
         }
+        await client.query('COMMIT');
+      } catch (error) {
+        if (client) await client.query('ROLLBACK').catch(() => {});
+        failedItems.push(...items);
+        setError('flush', error as Error);
+      } finally {
+        client?.release();
       }
+    }
 
-      await client.query('COMMIT');
-    } catch (error) {
-      if (client) await client.query('ROLLBACK').catch(() => {});
-      queue.unshift(...batch);
-      setError('flush', error as Error);
-    } finally {
-      client?.release();
-      flushing = false;
-      if (queue.length > 0) {
-        setTimeout(() => { void flushQueue(); }, 80);
-      }
+    if (failedItems.length > 0) queue.unshift(...failedItems);
+    flushing = false;
+    if (queue.length > 0) {
+      setTimeout(() => { void flushQueue(); }, 80);
     }
   }
 

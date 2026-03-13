@@ -1,6 +1,8 @@
 import * as claimState from '../claim-state.js';
 import { evaluateClaimPolicy } from '../policy-engine.js';
-import { EVENT_HISTORY_MAX, FRED_NOT_APPLICABLE_SUMMARY, FRED_AWAITING_SUMMARY, CONGRESS_NOT_APPLICABLE_SUMMARY, CONGRESS_AWAITING_SUMMARY } from '../constants.js';
+import { FRED_NOT_APPLICABLE_SUMMARY, FRED_AWAITING_SUMMARY, CONGRESS_NOT_APPLICABLE_SUMMARY, CONGRESS_AWAITING_SUMMARY } from '../constants.js';
+import type { RingBuffer } from '../ring-buffer.js';
+import { isClaimEvent } from '../types.js';
 import type { Claim, PipelineEvent, PolicyEvaluation, ActivityStore } from '../types.js';
 import type { PipelineRegistry } from '../pipeline-registry.js';
 import type { SseManager } from './sse.js';
@@ -9,7 +11,7 @@ export interface ClaimEventContext {
   pipelineRegistry: PipelineRegistry;
   activityStore: ActivityStore;
   sseManager: SseManager;
-  eventHistory: PipelineEvent[];
+  eventHistory: RingBuffer<PipelineEvent>;
   getEventSeq: () => number;
   getCurrentRunId: () => string | null;
   setCurrentRunId: (runId: string | null) => void;
@@ -23,8 +25,6 @@ export interface ClaimEventContext {
 export function withPolicy(claim: Claim): Claim & PolicyEvaluation {
   return { ...claim, ...evaluateClaimPolicy(claim) };
 }
-
-function isClaimEventType(type: string): boolean { return type.startsWith('claim.'); }
 
 function nextClaimVersion(claim: Claim): number {
   const parsed = Number.parseInt(String(claim?.version ?? 1), 10);
@@ -58,71 +58,69 @@ export function claimSnapshotEventFields(claim: Claim): Record<string, unknown> 
   };
 }
 
-export function buildClaimEventPayload(type: string, claim: Claim, extras: Record<string, unknown> = {}): Record<string, unknown> {
-  return { type, runId: claim.runId, claimId: claim.claimId, ...claimSnapshotEventFields(claim), ...extras };
+export function buildClaimEventPayload(type: string, claim: Claim, extras: Record<string, unknown> = {}): PipelineEvent {
+  return { type, runId: claim.runId, claimId: claim.claimId, ...claimSnapshotEventFields(claim), ...extras } as PipelineEvent;
 }
 
 export function updateClaimState(event: PipelineEvent, ctx: ClaimEventContext): void {
-  const e = event as Record<string, unknown>;
-
-  if (e.type === 'claim.detected') {
+  if (event.type === 'claim.detected') {
     const row = withPolicy({
-      claimId: e.claimId as string, runId: e.runId as string ?? null, claim: e.claim as string,
-      status: e.status as string, verdict: (e.verdict ?? 'unverified') as Claim['verdict'],
-      confidence: e.confidence as number, reasons: e.reasons as string[],
-      claimCategory: (e.claimCategory ?? 'general') as Claim['claimCategory'],
-      claimTypeTag: (e.claimTypeTag ?? 'other') as Claim['claimTypeTag'],
-      claimTypeConfidence: (e.claimTypeConfidence ?? e.confidence ?? 0) as number,
-      googleEvidenceState: 'none', fredEvidenceState: e.claimCategory === 'economic' ? 'ambiguous' : 'not_applicable',
-      fredEvidenceSummary: e.claimCategory === 'economic' ? FRED_AWAITING_SUMMARY : FRED_NOT_APPLICABLE_SUMMARY,
-      fredEvidenceSources: [], congressEvidenceState: (e.claimCategory === 'political' || e.claimCategory === 'legislative') ? 'ambiguous' : 'not_applicable',
-      congressEvidenceSummary: (e.claimCategory === 'political' || e.claimCategory === 'legislative') ? CONGRESS_AWAITING_SUMMARY : CONGRESS_NOT_APPLICABLE_SUMMARY,
+      claimId: event.claimId, runId: event.runId ?? null, claim: event.claim,
+      status: event.status, verdict: (event.verdict ?? 'unverified') as Claim['verdict'],
+      confidence: event.confidence, reasons: event.reasons,
+      claimCategory: (event.claimCategory ?? 'general') as Claim['claimCategory'],
+      claimTypeTag: (event.claimTypeTag ?? 'other') as Claim['claimTypeTag'],
+      claimTypeConfidence: (event.claimTypeConfidence ?? event.confidence ?? 0) as number,
+      googleEvidenceState: 'none', fredEvidenceState: event.claimCategory === 'economic' ? 'ambiguous' : 'not_applicable',
+      fredEvidenceSummary: event.claimCategory === 'economic' ? FRED_AWAITING_SUMMARY : FRED_NOT_APPLICABLE_SUMMARY,
+      fredEvidenceSources: [], congressEvidenceState: (event.claimCategory === 'political' || event.claimCategory === 'legislative') ? 'ambiguous' : 'not_applicable',
+      congressEvidenceSummary: (event.claimCategory === 'political' || event.claimCategory === 'legislative') ? CONGRESS_AWAITING_SUMMARY : CONGRESS_NOT_APPLICABLE_SUMMARY,
       congressEvidenceSources: [], correctedClaim: null, aiSummary: null, aiVerdict: null, aiConfidence: null, evidenceBasis: null,
       googleFcVerdict: null, googleFcConfidence: null, googleFcSummary: null,
-      chunkStartSec: e.chunkStartSec as number, chunkStartClock: e.chunkStartClock as string,
+      chunkStartSec: event.chunkStartSec, chunkStartClock: event.chunkStartClock,
       sources: [], summary: null, outputApprovalState: 'pending', outputPackageStatus: 'none',
       outputPackageId: null, outputPackageError: null, renderStatus: 'none', renderJobId: null,
       artifactUrl: null, renderError: null, approvedAt: null, approvedVersion: null, rejectedAt: null,
-      detectedAt: e.at as string, updatedAt: e.at as string, version: 1,
+      detectedAt: event.at as string, updatedAt: event.at as string, version: 1,
     } as Claim);
-    claimState.setClaim(e.claimId as string, row);
+    claimState.setClaim(event.claimId, row);
     return;
   }
 
-  if (e.type === 'claim.researching') {
-    const existing = claimState.getClaim(e.claimId as string);
-    if (existing) claimState.setClaim(e.claimId as string, withPolicy({ ...existing, status: 'researching', updatedAt: e.at as string, version: (existing.version ?? 1) + 1 }));
+  if (event.type === 'claim.researching') {
+    const existing = claimState.getClaim(event.claimId);
+    if (existing) claimState.setClaim(event.claimId, withPolicy({ ...existing, status: 'researching', updatedAt: event.at as string, version: (existing.version ?? 1) + 1 }));
     return;
   }
 
-  if (e.type === 'claim.updated') {
-    const existing = claimState.getClaim(e.claimId as string) ?? { claimId: e.claimId, claim: e.claim, detectedAt: e.at } as Claim;
+  if (event.type === 'claim.updated') {
+    const existing = claimState.getClaim(event.claimId) ?? { claimId: event.claimId, claim: event.claim, detectedAt: event.at } as Claim;
     const wasApproved = existing.outputApprovalState === 'approved';
     const nextApprovalState = wasApproved ? 'pending' : existing.outputApprovalState ?? 'pending';
     const reset = wasApproved;
-    claimState.setClaim(e.claimId as string, withPolicy({
-      ...existing, runId: (e.runId as string) ?? existing.runId ?? ctx.getCurrentRunId() ?? null,
-      status: e.status as string, verdict: e.verdict as Claim['verdict'], confidence: e.confidence as number,
-      summary: e.summary as string, sources: e.sources as Claim['sources'],
-      requiresProducerApproval: e.requiresProducerApproval as boolean,
-      claimCategory: (e.claimCategory ?? existing.claimCategory ?? 'general') as Claim['claimCategory'],
-      claimTypeTag: (e.claimTypeTag ?? existing.claimTypeTag ?? 'other') as Claim['claimTypeTag'],
-      claimTypeConfidence: (e.claimTypeConfidence ?? existing.claimTypeConfidence ?? e.confidence ?? 0) as number,
-      googleEvidenceState: (e.googleEvidenceState ?? existing.googleEvidenceState ?? 'none') as Claim['googleEvidenceState'],
-      fredEvidenceState: (e.fredEvidenceState ?? existing.fredEvidenceState ?? 'not_applicable') as Claim['fredEvidenceState'],
-      fredEvidenceSummary: (e.fredEvidenceSummary ?? existing.fredEvidenceSummary ?? null) as string | null,
-      fredEvidenceSources: (e.fredEvidenceSources ?? existing.fredEvidenceSources ?? []) as Claim['fredEvidenceSources'],
-      congressEvidenceState: (e.congressEvidenceState ?? existing.congressEvidenceState ?? 'not_applicable') as Claim['congressEvidenceState'],
-      congressEvidenceSummary: (e.congressEvidenceSummary ?? existing.congressEvidenceSummary ?? null) as string | null,
-      congressEvidenceSources: (e.congressEvidenceSources ?? existing.congressEvidenceSources ?? []) as Claim['congressEvidenceSources'],
-      correctedClaim: (e.correctedClaim ?? existing.correctedClaim ?? null) as string | null,
-      aiSummary: (e.aiSummary ?? existing.aiSummary ?? null) as string | null,
-      aiVerdict: (e.aiVerdict ?? existing.aiVerdict ?? null) as Claim['aiVerdict'],
-      aiConfidence: (e.aiConfidence ?? existing.aiConfidence ?? null) as number | null,
-      evidenceBasis: (e.evidenceBasis ?? existing.evidenceBasis ?? null) as Claim['evidenceBasis'],
-      googleFcVerdict: (e.googleFcVerdict ?? existing.googleFcVerdict ?? null) as Claim['googleFcVerdict'],
-      googleFcConfidence: (e.googleFcConfidence ?? existing.googleFcConfidence ?? null) as number | null,
-      googleFcSummary: (e.googleFcSummary ?? existing.googleFcSummary ?? null) as string | null,
+    claimState.setClaim(event.claimId, withPolicy({
+      ...existing, runId: event.runId ?? existing.runId ?? ctx.getCurrentRunId() ?? null,
+      status: event.status, verdict: event.verdict as Claim['verdict'], confidence: event.confidence,
+      summary: (event.summary ?? null) as string | null, sources: (event.sources ?? []) as Claim['sources'],
+      requiresProducerApproval: event.requiresProducerApproval,
+      claimCategory: (event.claimCategory ?? existing.claimCategory ?? 'general') as Claim['claimCategory'],
+      claimTypeTag: (event.claimTypeTag ?? existing.claimTypeTag ?? 'other') as Claim['claimTypeTag'],
+      claimTypeConfidence: (event.claimTypeConfidence ?? existing.claimTypeConfidence ?? event.confidence ?? 0) as number,
+      googleEvidenceState: (event.googleEvidenceState ?? existing.googleEvidenceState ?? 'none') as Claim['googleEvidenceState'],
+      fredEvidenceState: (event.fredEvidenceState ?? existing.fredEvidenceState ?? 'not_applicable') as Claim['fredEvidenceState'],
+      fredEvidenceSummary: (event.fredEvidenceSummary ?? existing.fredEvidenceSummary ?? null) as string | null,
+      fredEvidenceSources: (event.fredEvidenceSources ?? existing.fredEvidenceSources ?? []) as Claim['fredEvidenceSources'],
+      congressEvidenceState: (event.congressEvidenceState ?? existing.congressEvidenceState ?? 'not_applicable') as Claim['congressEvidenceState'],
+      congressEvidenceSummary: (event.congressEvidenceSummary ?? existing.congressEvidenceSummary ?? null) as string | null,
+      congressEvidenceSources: (event.congressEvidenceSources ?? existing.congressEvidenceSources ?? []) as Claim['congressEvidenceSources'],
+      correctedClaim: (event.correctedClaim ?? existing.correctedClaim ?? null) as string | null,
+      aiSummary: (event.aiSummary ?? existing.aiSummary ?? null) as string | null,
+      aiVerdict: (event.aiVerdict ?? existing.aiVerdict ?? null) as Claim['aiVerdict'],
+      aiConfidence: (event.aiConfidence ?? existing.aiConfidence ?? null) as number | null,
+      evidenceBasis: (event.evidenceBasis ?? existing.evidenceBasis ?? null) as Claim['evidenceBasis'],
+      googleFcVerdict: (event.googleFcVerdict ?? existing.googleFcVerdict ?? null) as Claim['googleFcVerdict'],
+      googleFcConfidence: (event.googleFcConfidence ?? existing.googleFcConfidence ?? null) as number | null,
+      googleFcSummary: (event.googleFcSummary ?? existing.googleFcSummary ?? null) as string | null,
       outputApprovalState: nextApprovalState as Claim['outputApprovalState'],
       approvedAt: reset ? null : existing.approvedAt ?? null,
       approvedVersion: reset ? null : existing.approvedVersion ?? null,
@@ -133,36 +131,38 @@ export function updateClaimState(event: PipelineEvent, ctx: ClaimEventContext): 
       renderJobId: reset ? null : existing.renderJobId ?? null,
       artifactUrl: reset ? null : existing.artifactUrl ?? null,
       renderError: reset ? null : existing.renderError ?? null,
-      updatedAt: e.at as string, version: (existing.version ?? 1) + 1,
+      updatedAt: event.at as string, version: (existing.version ?? 1) + 1,
     } as Claim));
     return;
   }
 
-  const claimId = e.claimId as string;
+  // Remaining claim events require existing claim state
+  if (!isClaimEvent(event)) return;
+  const claimId = event.claimId;
   if (!claimId) return;
   const existing = claimState.getClaim(claimId);
   if (!existing) return;
 
-  if (e.type === 'claim.output_approved') {
-    claimState.setClaim(claimId, withPolicy({ ...existing, outputApprovalState: 'approved', approvedAt: (e.approvedAt ?? e.at) as string, approvedVersion: (e.approvedVersion ?? nextClaimVersion(existing)) as number, rejectedAt: null, updatedAt: e.at as string, version: (existing.version ?? 1) + 1 }));
-  } else if (e.type === 'claim.output_rejected') {
-    claimState.setClaim(claimId, withPolicy({ ...existing, outputApprovalState: 'rejected', approvedAt: null, approvedVersion: null, rejectedAt: (e.rejectedAt ?? e.at) as string, updatedAt: e.at as string, version: (existing.version ?? 1) + 1 }));
-  } else if (e.type === 'claim.output_package_queued' || e.type === 'claim.output_package_ready' || e.type === 'claim.output_package_failed') {
+  if (event.type === 'claim.output_approved') {
+    claimState.setClaim(claimId, withPolicy({ ...existing, outputApprovalState: 'approved', approvedAt: (event.approvedAt ?? event.at) as string, approvedVersion: (event.approvedVersion ?? nextClaimVersion(existing)) as number, rejectedAt: null, updatedAt: event.at as string, version: (existing.version ?? 1) + 1 }));
+  } else if (event.type === 'claim.output_rejected') {
+    claimState.setClaim(claimId, withPolicy({ ...existing, outputApprovalState: 'rejected', approvedAt: null, approvedVersion: null, rejectedAt: (event.rejectedAt ?? event.at) as string, updatedAt: event.at as string, version: (existing.version ?? 1) + 1 }));
+  } else if (event.type === 'claim.output_package_queued' || event.type === 'claim.output_package_ready' || event.type === 'claim.output_package_failed') {
     if (existing.outputApprovalState !== 'approved') return;
-    if (Number.isInteger(e.claimVersion) && Number.isInteger(existing.approvedVersion) && e.claimVersion !== existing.approvedVersion) return;
-    const status = e.type === 'claim.output_package_queued' ? 'queued' : e.type === 'claim.output_package_ready' ? 'ready' : 'failed';
-    claimState.setClaim(claimId, withPolicy({ ...existing, outputPackageStatus: status as Claim['outputPackageStatus'], outputPackageId: (e.packageId ?? existing.outputPackageId ?? null) as string | null, outputPackageError: status === 'failed' ? ((e.error ?? 'Package generation failed') as string) : null, updatedAt: e.at as string, version: (existing.version ?? 1) + 1 }));
-  } else if (e.type === 'claim.render_queued' || e.type === 'claim.render_ready' || e.type === 'claim.render_failed') {
+    if (Number.isInteger(event.claimVersion) && Number.isInteger(existing.approvedVersion) && event.claimVersion !== existing.approvedVersion) return;
+    const status = event.type === 'claim.output_package_queued' ? 'queued' : event.type === 'claim.output_package_ready' ? 'ready' : 'failed';
+    claimState.setClaim(claimId, withPolicy({ ...existing, outputPackageStatus: status as Claim['outputPackageStatus'], outputPackageId: (event.packageId ?? existing.outputPackageId ?? null) as string | null, outputPackageError: status === 'failed' ? ((event.error ?? 'Package generation failed') as string) : null, updatedAt: event.at as string, version: (existing.version ?? 1) + 1 }));
+  } else if (event.type === 'claim.render_queued' || event.type === 'claim.render_ready' || event.type === 'claim.render_failed') {
     if (existing.outputApprovalState !== 'approved') return;
-    if (Number.isInteger(e.claimVersion) && Number.isInteger(existing.approvedVersion) && e.claimVersion !== existing.approvedVersion) return;
-    if ((e.type === 'claim.render_ready' || e.type === 'claim.render_failed') && existing.renderJobId && e.renderJobId && existing.renderJobId !== e.renderJobId) return;
-    const status = e.type === 'claim.render_queued' ? 'queued' : e.type === 'claim.render_ready' ? 'ready' : 'failed';
+    if (Number.isInteger(event.claimVersion) && Number.isInteger(existing.approvedVersion) && event.claimVersion !== existing.approvedVersion) return;
+    if ((event.type === 'claim.render_ready' || event.type === 'claim.render_failed') && existing.renderJobId && event.renderJobId && existing.renderJobId !== event.renderJobId) return;
+    const status = event.type === 'claim.render_queued' ? 'queued' : event.type === 'claim.render_ready' ? 'ready' : 'failed';
     claimState.setClaim(claimId, withPolicy({
       ...existing, renderStatus: status as Claim['renderStatus'],
-      renderJobId: (e.renderJobId ?? existing.renderJobId ?? null) as string | null,
-      artifactUrl: status === 'ready' ? ((e.artifactUrl ?? existing.artifactUrl ?? null) as string | null) : existing.artifactUrl,
-      renderError: status === 'failed' ? ((e.error ?? 'Render job failed') as string) : null,
-      updatedAt: e.at as string, version: (existing.version ?? 1) + 1,
+      renderJobId: (event.renderJobId ?? existing.renderJobId ?? null) as string | null,
+      artifactUrl: status === 'ready' ? ((event.artifactUrl ?? existing.artifactUrl ?? null) as string | null) : existing.artifactUrl,
+      renderError: status === 'failed' ? ((event.error ?? 'Render job failed') as string) : null,
+      updatedAt: event.at as string, version: (existing.version ?? 1) + 1,
     }));
   }
 }
@@ -171,28 +171,26 @@ export function createEmitEvent(ctx: ClaimEventContext): (event: PipelineEvent) 
   return function emitEvent(event: PipelineEvent): void {
     const seq = ctx.getEventSeq();
     let enriched: PipelineEvent = { seq, ...event };
-    const e = enriched as Record<string, unknown>;
 
-    if (e.type === 'pipeline.started') { ctx.setCurrentRunId((e.runId as string) ?? null); ctx.eventHistory.length = 0; }
+    if (enriched.type === 'pipeline.started') { ctx.setCurrentRunId(enriched.runId ?? null); ctx.eventHistory.clear(); }
     updateClaimState(enriched, ctx);
 
-    if (e.type === 'pipeline.started') {
-      ctx.activityStore.enqueueRunStart({ runId: e.runId ?? null, youtubeUrl: e.youtubeUrl ?? null, chunkSeconds: e.chunkSeconds ?? null, model: e.model ?? null, startedAt: e.at });
-    } else if (e.type === 'pipeline.stopped') {
-      ctx.activityStore.enqueueRunStop({ runId: e.runId ?? ctx.getCurrentRunId() ?? null, reason: e.reason ?? null, stoppedAt: e.at });
+    if (enriched.type === 'pipeline.started') {
+      ctx.activityStore.enqueueRunStart({ runId: enriched.runId ?? null, youtubeUrl: enriched.youtubeUrl ?? null, chunkSeconds: enriched.chunkSeconds ?? null, model: enriched.model ?? null, startedAt: enriched.at });
+    } else if (enriched.type === 'pipeline.stopped') {
+      ctx.activityStore.enqueueRunStop({ runId: enriched.runId ?? ctx.getCurrentRunId() ?? null, reason: enriched.reason ?? null, stoppedAt: enriched.at });
     }
 
-    if (isClaimEventType(e.type as string) && e.claimId) {
-      const snapshot = claimState.getClaim(e.claimId as string);
-      if (snapshot) { enriched = { ...enriched, ...claimSnapshotEventFields(snapshot) }; ctx.activityStore.enqueueClaimSnapshot(snapshot as unknown as Record<string, unknown>); }
+    if (isClaimEvent(enriched) && enriched.claimId) {
+      const snapshot = claimState.getClaim(enriched.claimId);
+      if (snapshot) { enriched = { ...enriched, ...claimSnapshotEventFields(snapshot) } as PipelineEvent; ctx.activityStore.enqueueClaimSnapshot(snapshot as unknown as Record<string, unknown>); }
     }
 
     ctx.eventHistory.push(enriched);
-    if (ctx.eventHistory.length > EVENT_HISTORY_MAX) ctx.eventHistory.shift();
     ctx.activityStore.enqueueEvent(enriched);
 
-    if (e.type === 'pipeline.stopped') {
-      const stoppedRunId = e.runId as string | undefined;
+    if (enriched.type === 'pipeline.stopped') {
+      const stoppedRunId = enriched.runId;
       const stoppedEntry = stoppedRunId ? ctx.pipelineRegistry.getByRunId(stoppedRunId) : null;
       if (stoppedEntry) {
         ctx.pipelineRegistry.remove(stoppedEntry.pipelineId);

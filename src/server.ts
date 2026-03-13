@@ -10,6 +10,8 @@ import { createPipelineRegistry } from './pipeline-registry.js';
 import * as claimState from './claim-state.js';
 import { createLogger } from './logger.js';
 import type { PipelineEvent, PipelineInstance } from './types.js';
+import { RingBuffer } from './ring-buffer.js';
+import { EVENT_HISTORY_MAX } from './constants.js';
 
 import { createSseManager } from './server/sse.js';
 import { isControlAction, isReadProtected, registerAuthHook } from './server/auth.js';
@@ -32,7 +34,7 @@ let currentOverlayKey: string | null = null;
 let currentYoutubeUrl: string | null = null;
 let currentStartedAt: string | null = null;
 let eventSeq = 0;
-const eventHistory: PipelineEvent[] = [];
+const eventHistory = new RingBuffer<PipelineEvent>(EVENT_HISTORY_MAX);
 
 const outputPackageService = createOutputPackageService();
 const renderService = createRenderService({ takumiRenderUrl: env.TAKUMI_RENDER_URL, timeoutMs: env.RENDER_TIMEOUT_MS });

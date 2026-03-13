@@ -229,10 +229,36 @@ export interface GeminiCandidate {
   content?: { parts?: Array<{ text?: string }> };
 }
 
+// ── Ingest Source (C0) ──────────────────────────────────────────────────────
+
+export type IngestSourceSpec = { type: 'youtube'; url: string };
+
+export interface IngestSourceCallbacks {
+  onData: (pcm: Buffer) => void;
+  onEnd: (reason: string) => void;
+  onLog: (type: string, payload: Record<string, unknown>) => void;
+  onReconnect?: () => void;
+}
+
+export interface IngestSource {
+  start(): void;
+  stop(reason?: string): void;
+  getStatus(): IngestStatus;
+}
+
+export interface IngestStatus {
+  state: string;
+  reconnectAttempt: number;
+  reconnectEnabled: boolean;
+  maxRetries: number;
+  lastExitInfo: IngestExitInfo | null;
+  lastEventAt: string | null;
+}
+
 // ── Pipeline ────────────────────────────────────────────────────────────────
 
 export interface PipelineConfig {
-  youtubeUrl: string;
+  source: IngestSourceSpec;
   geminiApiKey: string;
   geminiModel?: string;
   geminiVerifyModel?: string;
@@ -278,17 +304,148 @@ export interface IngestExitInfo {
   ffmpegSignal: string | null;
 }
 
-// ── Pipeline Events ─────────────────────────────────────────────────────────
+// ── Pipeline Events (B4 — Discriminated Union) ──────────────────────────────
 
-export interface BasePipelineEvent {
-  type: string;
-  runId?: string;
+interface EventBase {
   at?: string;
   seq?: number;
+  runId?: string;
   [key: string]: unknown;
 }
 
-export type PipelineEvent = BasePipelineEvent;
+// Pipeline lifecycle
+export interface PipelineStartedEvent extends EventBase {
+  type: 'pipeline.started';
+  youtubeUrl?: string;
+  chunkSeconds?: number;
+  model?: string;
+}
+
+export interface PipelineStoppedEvent extends EventBase {
+  type: 'pipeline.stopped';
+  reason?: string;
+}
+
+export interface PipelineReconnectEvent extends EventBase {
+  type: 'pipeline.reconnect_scheduled' | 'pipeline.reconnect_started' | 'pipeline.reconnect_succeeded';
+  attempt?: number;
+  delayMs?: number;
+}
+
+export interface PipelineInfoEvent extends EventBase {
+  type: 'pipeline.log' | 'pipeline.error' | 'pipeline.warning' | 'pipeline.ingest_stalled';
+  stage?: string;
+  message?: string;
+}
+
+// Audio & transcription
+export interface AudioChunkEvent extends EventBase {
+  type: 'audio.chunk';
+  chunkIndex?: number;
+  bytes?: number;
+}
+
+export interface TranscriptEvent extends EventBase {
+  type: 'transcript.segment' | 'transcript.error';
+  text?: string;
+  chunkIndex?: number;
+  segmentId?: string;
+  message?: string;
+}
+
+// Claim events
+export interface ClaimDetectedEvent extends EventBase {
+  type: 'claim.detected';
+  claimId: string;
+  claim: string;
+  status: string;
+  verdict?: string;
+  confidence: number;
+  reasons?: string[];
+  claimCategory?: string;
+  claimTypeTag?: string;
+  claimTypeConfidence?: number;
+  chunkStartSec: number;
+  chunkStartClock: string;
+}
+
+export interface ClaimResearchingEvent extends EventBase {
+  type: 'claim.researching';
+  claimId: string;
+  claim?: string;
+}
+
+export interface ClaimUpdatedEvent extends EventBase {
+  type: 'claim.updated';
+  claimId: string;
+  claim?: string;
+  status: string;
+  verdict: string;
+  confidence: number;
+  summary?: string | null;
+  sources?: FactCheckSource[];
+  requiresProducerApproval?: boolean;
+  claimCategory?: string;
+  claimTypeTag?: string;
+  claimTypeConfidence?: number;
+  googleEvidenceState?: string;
+  fredEvidenceState?: string;
+  fredEvidenceSummary?: string | null;
+  fredEvidenceSources?: unknown[];
+  congressEvidenceState?: string;
+  congressEvidenceSummary?: string | null;
+  congressEvidenceSources?: unknown[];
+  correctedClaim?: string | null;
+  aiSummary?: string | null;
+  aiVerdict?: string | null;
+  aiConfidence?: number | null;
+  evidenceBasis?: string | null;
+  googleFcVerdict?: string | null;
+  googleFcConfidence?: number | null;
+  googleFcSummary?: string | null;
+}
+
+export interface ClaimApprovalEvent extends EventBase {
+  type: 'claim.output_approved' | 'claim.output_rejected';
+  claimId: string;
+  outputApprovalState?: string;
+  approvedAt?: string;
+  approvedVersion?: number;
+  rejectedAt?: string;
+}
+
+export interface ClaimOutputPackageEvent extends EventBase {
+  type: 'claim.output_package_queued' | 'claim.output_package_ready' | 'claim.output_package_failed';
+  claimId: string;
+  packageId?: string;
+  claimVersion?: number | null;
+  error?: string;
+  outputPackageStatus?: string;
+}
+
+export interface ClaimRenderEvent extends EventBase {
+  type: 'claim.render_queued' | 'claim.render_ready' | 'claim.render_failed';
+  claimId: string;
+  renderJobId?: string;
+  claimVersion?: number | null;
+  artifactUrl?: string | null;
+  error?: string;
+  renderStatus?: string;
+  idempotencyKey?: string;
+}
+
+export type ClaimEvent =
+  | ClaimDetectedEvent | ClaimResearchingEvent | ClaimUpdatedEvent
+  | ClaimApprovalEvent | ClaimOutputPackageEvent | ClaimRenderEvent;
+
+export type PipelineEvent =
+  | PipelineStartedEvent | PipelineStoppedEvent | PipelineReconnectEvent | PipelineInfoEvent
+  | AudioChunkEvent | TranscriptEvent
+  | ClaimEvent;
+
+export function isClaimEvent(event: PipelineEvent): event is ClaimEvent {
+  return event.type.startsWith('claim.');
+}
 
 // ── Render Service ──────────────────────────────────────────────────────────
 

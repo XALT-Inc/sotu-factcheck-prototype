@@ -7,6 +7,7 @@ import fastifyStatic from '@fastify/static';
 
 import * as claimState from '../claim-state.js';
 import type { PipelineEvent, PipelineInstance, ActivityStore } from '../types.js';
+import type { RingBuffer } from '../ring-buffer.js';
 import type { PipelineRegistry, PipelineEntry } from '../pipeline-registry.js';
 import type { OutputPackageService } from '../output-package-service.js';
 import type { RenderService } from '../render-service.js';
@@ -20,7 +21,7 @@ export interface RoutesDeps {
   outputPackageService: OutputPackageService;
   renderService: RenderService;
   sseManager: SseManager;
-  eventHistory: PipelineEvent[];
+  eventHistory: RingBuffer<PipelineEvent>;
   emitEvent: (event: PipelineEvent) => void;
   getActivePipeline: () => PipelineInstance | null;
   getCurrentRunId: () => string | null;
@@ -152,7 +153,9 @@ export async function registerRoutes(app: FastifyInstance, deps: RoutesDeps): Pr
     reply.hijack();
     const lastEventIdRaw = request.headers['last-event-id'];
     const lastEventId = typeof lastEventIdRaw === 'string' ? Number.parseInt(lastEventIdRaw, 10) : Number.NaN;
-    deps.sseManager.addClient(raw, Number.isInteger(lastEventId) ? lastEventId : null, deps.eventHistory);
+    const query = request.query as Record<string, string>;
+    const filterRunId = typeof query.runId === 'string' && query.runId.trim() ? query.runId.trim() : null;
+    deps.sseManager.addClient(raw, Number.isInteger(lastEventId) ? lastEventId : null, deps.eventHistory, filterRunId);
   });
 
   // ── Pipeline start/stop ────────────────────────────────────────────────
@@ -170,7 +173,7 @@ export async function registerRoutes(app: FastifyInstance, deps: RoutesDeps): Pr
     outputPackageService.clear(); renderService.clear();
 
     const pipelineConfig = {
-      youtubeUrl, geminiApiKey: env.GEMINI_API_KEY as string, geminiModel: env.GEMINI_TRANSCRIBE_MODEL as string,
+      source: { type: 'youtube' as const, url: youtubeUrl }, geminiApiKey: env.GEMINI_API_KEY as string, geminiModel: env.GEMINI_TRANSCRIBE_MODEL as string,
       factCheckApiKey: env.GOOGLE_FACT_CHECK_API_KEY as string, fredApiKey: env.FRED_API_KEY as string,
       congressApiKey: env.CONGRESS_API_KEY as string, chunkSeconds: env.CHUNK_SECONDS as number,
       maxResearchConcurrency: env.MAX_RESEARCH_CONCURRENCY as number, claimDetectionThreshold: env.CLAIM_DETECTION_THRESHOLD as number,
@@ -253,7 +256,7 @@ export async function registerRoutes(app: FastifyInstance, deps: RoutesDeps): Pr
       if (!isValidClaimTypeTag(requestedTag)) { logResult('failed_invalid_tag', { providedTag: requestedTag || null }); return reply.status(400).send({ ok: false, error: 'Tag must be one of: numeric_factual, simple_policy, other.' }); }
       if (!reason) { logResult('failed_missing_reason'); return reply.status(400).send({ ok: false, error: 'A non-empty reason is required for tag override.' }); }
       if (existing.outputApprovalState === 'approved') { logResult('failed_approved_locked'); return reply.status(409).send({ ok: false, error: 'Claim is already approved. Reject output first before changing policy classification.' }); }
-      emitEvent(buildClaimEventPayload('claim.updated', existing, { claimTypeTag: requestedTag, claimTypeConfidence: existing.claimTypeConfidence ?? existing.confidence ?? 0, status: existing.status, requiresProducerApproval: true }) as PipelineEvent);
+      emitEvent(buildClaimEventPayload('claim.updated', existing, { claimTypeTag: requestedTag, claimTypeConfidence: existing.claimTypeConfidence ?? existing.confidence ?? 0, status: existing.status, requiresProducerApproval: true }));
       logResult('succeeded', { claimTypeTag: requestedTag });
       return { ok: true, claim: claimState.getClaim(claimId) };
     }
@@ -290,7 +293,7 @@ export async function registerRoutes(app: FastifyInstance, deps: RoutesDeps): Pr
       if (existing.outputApprovalState === 'approved') { logResult('noop_already_approved'); return { ok: true, claim: existing, package: outputPackageService.getByClaimId(claimId), renderJob: renderService.getByClaimId(claimId) }; }
       const policy = withPolicy(existing);
       if (!policy.approvalEligibility) { logResult(`failed_${policy.approvalBlockReason ?? 'blocked'}`); return reply.status(409).send({ ok: false, error: policyBlockMessage(policy.approvalBlockReason ?? 'blocked', policy) }); }
-      emitEvent(buildClaimEventPayload('claim.output_approved', policy, { outputApprovalState: 'approved', approvedAt: new Date().toISOString(), approvedVersion: nextClaimVersion(policy) }) as PipelineEvent);
+      emitEvent(buildClaimEventPayload('claim.output_approved', policy, { outputApprovalState: 'approved', approvedAt: new Date().toISOString(), approvedVersion: nextClaimVersion(policy) }));
       const updatedClaim = claimState.getClaim(claimId);
       const av = Number.isInteger(updatedClaim?.approvedVersion) ? updatedClaim!.approvedVersion : null;
       const generatedPackage = await outputPackageService.queueForClaim({ ...updatedClaim!, version: av ?? updatedClaim?.version ?? null }, { runId: existing.runId });
@@ -303,7 +306,7 @@ export async function registerRoutes(app: FastifyInstance, deps: RoutesDeps): Pr
 
     // reject-output
     if (existing.outputApprovalState === 'rejected') { logResult('noop_already_rejected'); return { ok: true, claim: existing }; }
-    emitEvent(buildClaimEventPayload('claim.output_rejected', existing, { outputApprovalState: 'rejected', rejectedAt: new Date().toISOString() }) as PipelineEvent);
+    emitEvent(buildClaimEventPayload('claim.output_rejected', existing, { outputApprovalState: 'rejected', rejectedAt: new Date().toISOString() }));
     logResult('succeeded');
     return { ok: true, claim: claimState.getClaim(claimId) };
   });
