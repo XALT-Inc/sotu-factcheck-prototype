@@ -1,4 +1,4 @@
-import type { ActivityStore, PipelineEvent } from './types.js';
+import type { ActivityStore, PipelineEvent, RunSummary } from './types.js';
 
 const BATCH_SIZE = 50;
 const MAX_QUEUE_DEPTH = 10000;
@@ -34,6 +34,7 @@ export function createActivityStore(options: { databaseUrl?: string; onError?: (
       enqueueRenderJob: noop as (payload: Record<string, unknown>) => void,
       loadLatestRunClaims: async () => [],
       loadRunById: async () => null,
+      listRuns: async () => [],
       getStatus: () => ({ configured: false, ready: false, queueDepth: 0, lastError: null }),
     };
   }
@@ -231,6 +232,25 @@ export function createActivityStore(options: { databaseUrl?: string; onError?: (
       } catch (error) {
         setError('load_run_by_id', error as Error);
         return null;
+      }
+    },
+    async listRuns(): Promise<RunSummary[]> {
+      if (!(await ensureReady())) return [];
+      try {
+        const result = await pool!.query(
+          `SELECT r.run_id, r.youtube_url, r.started_at, r.stopped_at, r.stop_reason, COUNT(c.claim_id)::int AS claim_count FROM runs r LEFT JOIN claims c ON c.run_id = r.run_id GROUP BY r.run_id ORDER BY r.started_at DESC`
+        );
+        return result.rows.map((row: Record<string, unknown>) => ({
+          runId: row.run_id as string,
+          youtubeUrl: (row.youtube_url as string) ?? null,
+          startedAt: (row.started_at as Date).toISOString(),
+          stoppedAt: row.stopped_at ? (row.stopped_at as Date).toISOString() : null,
+          stopReason: (row.stop_reason as string) ?? null,
+          claimCount: (row.claim_count as number) ?? 0,
+        }));
+      } catch (error) {
+        setError('list_runs', error as Error);
+        return [];
       }
     },
     getStatus() {

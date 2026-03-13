@@ -197,6 +197,38 @@ export interface Claim {
   requiresProducerApproval?: boolean;
 }
 
+// ── Shared Output Interface (A3) ────────────────────────────────────────────
+
+export interface ClaimForOutput {
+  claimId: string;
+  runId?: string | null;
+  version?: number | null;
+  claim?: string | null;
+  correctedClaim?: string | null;
+  verdict?: string | null;
+  confidence?: number | null;
+  summary?: string | null;
+  chunkStartClock?: string | null;
+  sources?: Array<{
+    publisher?: string;
+    title?: string | null;
+    url?: string | null;
+    textualRating?: string | null;
+    reviewDate?: string | null;
+  }>;
+  fredEvidenceState?: string;
+  fredEvidenceSummary?: string | null;
+  fredEvidenceSources?: unknown[];
+  renderTemplateId?: string;
+  renderPayload?: Record<string, unknown> | null;
+}
+
+// ── Gemini API types (A8) ──────────────────────────────────────────────────
+
+export interface GeminiCandidate {
+  content?: { parts?: Array<{ text?: string }> };
+}
+
 // ── Pipeline ────────────────────────────────────────────────────────────────
 
 export interface PipelineConfig {
@@ -343,7 +375,19 @@ export interface ActivityStore {
   enqueueRenderJob: (payload: Record<string, unknown>) => void;
   loadLatestRunClaims: (limit?: number) => Promise<Record<string, unknown>[]>;
   loadRunById: (runId: string) => Promise<Record<string, unknown> | null>;
+  listRuns: () => Promise<RunSummary[]>;
   getStatus: () => { configured: boolean; ready: boolean; queueDepth: number; lastError: string | null };
+}
+
+// ── Run Summary ─────────────────────────────────────────────────────────────
+
+export interface RunSummary {
+  runId: string;
+  youtubeUrl: string | null;
+  startedAt: string;
+  stoppedAt: string | null;
+  stopReason: string | null;
+  claimCount: number;
 }
 
 // ── Database ────────────────────────────────────────────────────────────────

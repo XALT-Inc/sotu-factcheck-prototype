@@ -8,19 +8,19 @@ import { lookupCongressEvidence } from './congress-client.js';
 import { verifyClaim } from './gemini-verifier.js';
 import { pcm16ToWav } from './wav.js';
 import { clockTime, parsePositiveInt, parseNonNegativeInt } from './utils.js';
-import type { PipelineConfig, PipelineInstance, PipelineStatus, IngestExitInfo, PipelineEvent, EvidenceState } from './types.js';
+import type { PipelineConfig, PipelineInstance, PipelineStatus, IngestExitInfo, PipelineEvent, EvidenceState, GeminiCandidate } from './types.js';
+import {
+  INGEST_SAMPLE_RATE, INGEST_CHANNELS, INGEST_BYTES_PER_SAMPLE, INGEST_CLOSE_WAIT_MS,
+  CLAIM_CARRYOVER_MAX_CHARS, CLAIM_FALLBACK_FLUSH_CHARS,
+  CLAIM_RECENT_DEDUPE_TTL_MS, CLAIM_RECENT_DEDUPE_MAX,
+  TRANSCRIPT_CONTEXT_CHARS, TRANSCRIPT_FLUSH_MAX_CHARS, TRANSCRIPT_FLUSH_TIMEOUT_MS,
+  FRED_NOT_APPLICABLE_SUMMARY, CONGRESS_NOT_APPLICABLE_SUMMARY,
+} from './constants.js';
 
-const SAMPLE_RATE = 16000;
-const CHANNELS = 1;
-const BYTES_PER_SAMPLE = 2;
-const CLOSE_WAIT_MS = 1500;
-const CLAIM_CARRYOVER_MAX_CHARS = 900;
-const CLAIM_FALLBACK_FLUSH_CHARS = 160;
-const CLAIM_RECENT_DEDUPE_TTL_MS = 10 * 60 * 1000;
-const CLAIM_RECENT_DEDUPE_MAX = 1000;
-const TRANSCRIPT_CONTEXT_CHARS = 200;
-const TRANSCRIPT_FLUSH_MAX_CHARS = 600;
-const TRANSCRIPT_FLUSH_TIMEOUT_MS = 4000;
+const SAMPLE_RATE = INGEST_SAMPLE_RATE;
+const CHANNELS = INGEST_CHANNELS;
+const BYTES_PER_SAMPLE = INGEST_BYTES_PER_SAMPLE;
+const CLOSE_WAIT_MS = INGEST_CLOSE_WAIT_MS;
 
 function splitCompleteSentencesWithCarryover(text: string): { completeText: string; carryover: string } {
   const normalized = String(text ?? '').replace(/\s+/g, ' ').trim();
@@ -126,7 +126,6 @@ async function transcribePcmChunk(pcmChunk: Buffer, options: { apiKey: string; m
     throw new Error(`Gemini transcription failed (${response.status}): ${detail}`);
   }
 
-  interface GeminiCandidate { content?: { parts?: Array<{ text?: string }> } }
   interface GeminiResponse { candidates?: GeminiCandidate[]; promptFeedback?: { blockReason?: string } }
 
   const json = (await response.json()) as GeminiResponse;
@@ -411,14 +410,14 @@ export function createPipeline(options: PipelineConfig): PipelineInstance {
       if (isAborted()) return;
 
       let status = result.status;
-      let fredResult: { state: string; summary: string; sources: unknown[] } = { state: 'not_applicable', summary: 'No economic indicator mapping required for this claim.', sources: [] };
+      let fredResult: { state: string; summary: string; sources: unknown[] } = { state: 'not_applicable', summary: FRED_NOT_APPLICABLE_SUMMARY, sources: [] };
       if (claimPayload.claimCategory === 'economic') {
         fredResult = await lookupFredEvidence(claimPayload.claim, { apiKey: fredApiKey, signal: abortController.signal }) as typeof fredResult;
         if (isAborted()) return;
         if (fredResult.state !== 'matched') status = 'needs_manual_research';
       }
 
-      let congressResult: { state: string; summary: string; sources: unknown[] } = { state: 'not_applicable', summary: 'No legislative evidence lookup required for this claim.', sources: [] };
+      let congressResult: { state: string; summary: string; sources: unknown[] } = { state: 'not_applicable', summary: CONGRESS_NOT_APPLICABLE_SUMMARY, sources: [] };
       if (claimPayload.claimCategory === 'political' || claimPayload.claimCategory === 'legislative') {
         congressResult = await lookupCongressEvidence(claimPayload.claim, { apiKey: congressApiKey, signal: abortController.signal }) as typeof congressResult;
         if (isAborted()) return;
@@ -467,10 +466,10 @@ export function createPipeline(options: PipelineConfig): PipelineInstance {
         claimTypeConfidence: claimPayload.claimTypeConfidence ?? claimPayload.confidence ?? 0,
         googleEvidenceState: 'error',
         fredEvidenceState: claimPayload.claimCategory === 'economic' ? 'error' : 'not_applicable',
-        fredEvidenceSummary: claimPayload.claimCategory === 'economic' ? `FRED lookup not completed: ${(error as Error).message}` : 'No economic indicator mapping required for this claim.',
+        fredEvidenceSummary: claimPayload.claimCategory === 'economic' ? `FRED lookup not completed: ${(error as Error).message}` : FRED_NOT_APPLICABLE_SUMMARY,
         fredEvidenceSources: [],
         congressEvidenceState: (claimPayload.claimCategory === 'political' || claimPayload.claimCategory === 'legislative') ? 'error' : 'not_applicable',
-        congressEvidenceSummary: (claimPayload.claimCategory === 'political' || claimPayload.claimCategory === 'legislative') ? `Congress.gov lookup not completed: ${(error as Error).message}` : 'No legislative evidence lookup required for this claim.',
+        congressEvidenceSummary: (claimPayload.claimCategory === 'political' || claimPayload.claimCategory === 'legislative') ? `Congress.gov lookup not completed: ${(error as Error).message}` : CONGRESS_NOT_APPLICABLE_SUMMARY,
         congressEvidenceSources: [],
         correctedClaim: null, aiSummary: null, aiVerdict: 'unverified', aiConfidence: 0, evidenceBasis: null,
         googleFcVerdict: null, googleFcConfidence: null, googleFcSummary: null,

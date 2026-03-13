@@ -1,4 +1,5 @@
-import type { Verdict, EvidenceBasis, VerificationResult, VerificationEvidence } from './types.js';
+import type { Verdict, EvidenceBasis, VerificationResult, VerificationEvidence, GeminiCandidate } from './types.js';
+import { CLAIM_TEXT_LIMIT } from './constants.js';
 import { createLogger } from './logger.js';
 
 const log = createLogger('gemini-verifier');
@@ -127,12 +128,12 @@ export function normalizeResult(raw: Record<string, unknown>): VerificationResul
 
   const correctedClaim =
     typeof raw.correctedClaim === 'string' && raw.correctedClaim.trim()
-      ? raw.correctedClaim.trim().slice(0, 484)
+      ? raw.correctedClaim.trim().slice(0, CLAIM_TEXT_LIMIT)
       : null;
 
   const aiSummary =
     typeof raw.aiSummary === 'string' && raw.aiSummary.trim()
-      ? raw.aiSummary.trim().slice(0, 484)
+      ? raw.aiSummary.trim().slice(0, CLAIM_TEXT_LIMIT)
       : null;
 
   const validBases: EvidenceBasis[] = ['fact_check_match', 'fred_data', 'congress_data', 'general_knowledge', 'mixed'];
@@ -194,10 +195,6 @@ export async function verifyClaim(
   } catch (jsonError) {
     log.error({ err: jsonError }, 'response JSON parse error');
     return { ...SAFE_FALLBACK };
-  }
-
-  interface GeminiCandidate {
-    content?: { parts?: Array<{ text?: string }> };
   }
 
   const text = (json?.candidates as GeminiCandidate[] | undefined)

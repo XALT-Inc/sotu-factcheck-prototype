@@ -12,7 +12,7 @@ export interface ClaimRenderData {
   sources: Array<{ publisher: string; textualRating?: string | null }>;
 }
 
-const VERDICT_STYLES: Record<string, { bg: string; text: string; label: string }> = {
+export const VERDICT_STYLES: Record<string, { bg: string; text: string; label: string }> = {
   true: { bg: '#166534', text: '#4ade80', label: 'TRUE' },
   false: { bg: '#991b1b', text: '#f87171', label: 'FALSE' },
   misleading: { bg: '#92400e', text: '#fbbf24', label: 'MISLEADING' },

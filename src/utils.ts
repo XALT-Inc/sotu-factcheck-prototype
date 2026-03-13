@@ -27,3 +27,51 @@ export function compactWhitespace(value: unknown): string {
     .replace(/\s+/g, ' ')
     .trim();
 }
+
+// ── Shared verdict normalization (A1) ──────────────────────────────────────
+
+import type { Verdict, PipelineEvent } from './types.js';
+
+export function normalizeVerdict(textualRating: string = ''): Verdict {
+  const rating = compactWhitespace(textualRating).toLowerCase();
+  if (!rating) return 'unverified';
+
+  if (
+    rating.includes('pants on fire') || rating.includes('not true') ||
+    rating.includes('debunked') || rating.includes('no evidence') ||
+    rating.includes('fake') || rating.includes('hoax') ||
+    rating.includes('fabricated') || rating.includes('bogus') ||
+    rating.includes('incorrect') || rating.includes('false')
+  ) return 'false';
+
+  if (
+    rating.includes('misleading') || rating.includes('mostly false') ||
+    rating.includes('partly false') || rating.includes('half true') ||
+    rating.includes('mixed') || rating.includes('out of context') ||
+    rating.includes('missing context') || rating.includes('needs context') ||
+    rating.includes('partly true')
+  ) return 'misleading';
+
+  if (
+    rating.includes('mostly true') || rating.includes('true') ||
+    rating.includes('correct') || rating.includes('accurate') ||
+    rating.includes('authentic')
+  ) return 'true';
+
+  return 'unverified';
+}
+
+// ── Shared claim version normalization (A5) ────────────────────────────────
+
+export function normalizeClaimVersion(version: unknown): number {
+  const parsed = Number.parseInt(String(version ?? 1), 10);
+  return Number.isInteger(parsed) && parsed > 0 ? parsed : 1;
+}
+
+// ── Shared event emitter helper (A6) ───────────────────────────────────────
+
+export function createEmitter(onEvent: ((event: PipelineEvent) => void) | undefined) {
+  return function emit(type: string, payload: Record<string, unknown> = {}): void {
+    onEvent?.({ type, at: new Date().toISOString(), ...payload } as PipelineEvent);
+  };
+}

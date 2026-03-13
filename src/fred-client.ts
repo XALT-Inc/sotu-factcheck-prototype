@@ -1,4 +1,5 @@
 import type { FredResult, FredObservation } from './types.js';
+import { FRED_NOT_APPLICABLE_SUMMARY } from './constants.js';
 
 interface FredSeries {
   id: string;
@@ -92,7 +93,7 @@ export async function lookupFredEvidence(
   if (seriesList.length === 0) {
     return {
       state: 'not_applicable',
-      summary: 'No economic indicator mapping required for this claim.',
+      summary: FRED_NOT_APPLICABLE_SUMMARY,
       sources: [],
     };
   }

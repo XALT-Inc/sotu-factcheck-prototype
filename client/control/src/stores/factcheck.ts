@@ -1,6 +1,15 @@
 import { ref, computed } from 'vue';
 import { defineStore } from 'pinia';
 
+export interface Run {
+  runId: string;
+  youtubeUrl: string | null;
+  startedAt: string;
+  stoppedAt: string | null;
+  stopReason: string | null;
+  claimCount: number;
+}
+
 export interface Claim {
   claimId: string;
   runId: string | null;
@@ -39,6 +48,18 @@ export interface Claim {
   approvedVersion: number | null;
   version: number;
   updatedAt: string;
+  // Additional fields from API
+  detectedAt?: string;
+  approvedAt?: string;
+  rejectedAt?: string;
+  evidenceStatus?: string;
+  policyThreshold?: number;
+  independentSourceCount?: number;
+  evidenceConflict?: boolean;
+  renderError?: string;
+  googleFcVerdict?: string;
+  googleFcConfidence?: number;
+  googleFcSummary?: string;
 }
 
 const BASE_URL = '';
@@ -64,7 +85,8 @@ async function apiGet(path: string): Promise<Record<string, unknown>> {
 
 export const useFactcheckStore = defineStore('factcheck', () => {
   const claims = ref<Map<string, Claim>>(new Map());
-  const running = ref(false);
+  const runningPipelines = ref<Set<string>>(new Set());
+  const running = computed(() => runningPipelines.value.size > 0);
   const runId = ref<string | null>(null);
   const selectedClaimId = ref<string | null>(null);
   const authRequired = ref(false);
@@ -72,8 +94,12 @@ export const useFactcheckStore = defineStore('factcheck', () => {
   const sseConnected = ref(false);
   const transcriptSegments = ref<Array<{ text: string; at: string }>>([]);
   const healthData = ref<Record<string, unknown>>({});
+  const runs = ref<Run[]>([]);
+  const activeView = ref<'list' | 'panel'>('list');
+  const viewingRunId = ref<string | null>(null);
 
   let eventSource: EventSource | null = null;
+  let healthInterval: ReturnType<typeof setInterval> | null = null;
 
   const claimsList = computed(() =>
     Array.from(claims.value.values()).sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
@@ -86,12 +112,43 @@ export const useFactcheckStore = defineStore('factcheck', () => {
   const pendingClaims = computed(() => claimsList.value.filter(c => c.outputApprovalState === 'pending'));
   const approvedClaims = computed(() => claimsList.value.filter(c => c.outputApprovalState === 'approved'));
 
+  const viewingRun = computed(() => {
+    if (!viewingRunId.value) return null;
+    return runs.value.find(r => r.runId === viewingRunId.value) ?? null;
+  });
+
+  const isViewingLiveRun = computed(() =>
+    viewingRunId.value != null && runningPipelines.value.has(viewingRunId.value)
+  );
+
+  const claimStats = computed(() => {
+    const list = claimsList.value;
+    return {
+      total: list.length,
+      researching: list.filter(c => c.status === 'researching' || c.status === 'pending_research').length,
+      pending: list.filter(c => c.outputApprovalState === 'pending' && c.status !== 'researching' && c.status !== 'pending_research').length,
+      approved: list.filter(c => c.outputApprovalState === 'approved').length,
+      rejected: list.filter(c => c.outputApprovalState === 'rejected').length,
+      rendered: list.filter(c => c.renderStatus === 'ready').length,
+    };
+  });
+
   function updateClaimFromEvent(data: Record<string, unknown>) {
     const id = data.claimId as string;
     if (!id) return;
     const existing = claims.value.get(id);
     const merged = { ...(existing ?? {}), ...data } as Claim;
     claims.value.set(id, merged);
+  }
+
+  function startHealthPolling() {
+    stopHealthPolling();
+    void loadHealth();
+    healthInterval = setInterval(() => { void loadHealth(); }, 15000);
+  }
+
+  function stopHealthPolling() {
+    if (healthInterval) { clearInterval(healthInterval); healthInterval = null; }
   }
 
   function connectSSE() {
@@ -117,14 +174,25 @@ export const useFactcheckStore = defineStore('factcheck', () => {
 
     eventSource.addEventListener('pipeline.started', (e) => {
       const data = JSON.parse((e as MessageEvent).data) as Record<string, unknown>;
-      running.value = true;
-      runId.value = (data.runId as string) ?? null;
-      claims.value.clear();
+      const startedRunId = (data.runId as string) ?? null;
+      if (startedRunId) runningPipelines.value.add(startedRunId);
+      runId.value = startedRunId;
       transcriptSegments.value = [];
+      startHealthPolling();
     });
 
-    eventSource.addEventListener('pipeline.stopped', () => {
-      running.value = false;
+    eventSource.addEventListener('pipeline.stopped', (e) => {
+      const data = JSON.parse((e as MessageEvent).data) as Record<string, unknown>;
+      const stoppedRunId = (data.runId as string) ?? runId.value;
+      if (stoppedRunId) {
+        runningPipelines.value.delete(stoppedRunId);
+        const run = runs.value.find(r => r.runId === stoppedRunId);
+        if (run) {
+          run.stoppedAt = new Date().toISOString();
+          run.stopReason = (data.reason as string) ?? null;
+        }
+      }
+      if (runningPipelines.value.size === 0) stopHealthPolling();
     });
 
     eventSource.addEventListener('pipeline.transcript', (e) => {
@@ -155,11 +223,13 @@ export const useFactcheckStore = defineStore('factcheck', () => {
     localStorage.removeItem('controlPassword');
     authenticated.value = false;
     if (eventSource) { eventSource.close(); eventSource = null; }
+    stopHealthPolling();
   }
 
   async function loadClaims() {
-    const res = await apiGet('/api/claims');
-    running.value = Boolean(res.running);
+    const scopedRunId = viewingRunId.value;
+    const url = scopedRunId ? `/api/claims?runId=${encodeURIComponent(scopedRunId)}` : '/api/claims';
+    const res = await apiGet(url);
     runId.value = (res.runId as string) ?? null;
     const list = (res.claims ?? []) as Claim[];
     claims.value.clear();
@@ -171,11 +241,25 @@ export const useFactcheckStore = defineStore('factcheck', () => {
   }
 
   async function startPipeline(youtubeUrl: string, opts: Record<string, unknown> = {}) {
-    return apiPost('/api/start', { youtubeUrl, ...opts });
+    const res = await apiPost('/api/start', { youtubeUrl, ...opts });
+    if (res.ok && res.runId) {
+      const newRunId = res.runId as string;
+      const newRun: Run = {
+        runId: newRunId,
+        youtubeUrl,
+        startedAt: new Date().toISOString(),
+        stoppedAt: null,
+        stopReason: null,
+        claimCount: 0,
+      };
+      runs.value = [newRun, ...runs.value.filter(r => r.runId !== newRunId)];
+      runningPipelines.value.add(newRunId);
+    }
+    return res;
   }
 
-  async function stopPipeline() {
-    return apiPost('/api/stop');
+  async function stopPipeline(targetRunId?: string) {
+    return apiPost('/api/stop', targetRunId ? { runId: targetRunId } : {});
   }
 
   async function approveClaim(claimId: string, expectedVersion: number) {
@@ -198,6 +282,31 @@ export const useFactcheckStore = defineStore('factcheck', () => {
     selectedClaimId.value = id;
   }
 
+  async function loadRuns() {
+    const res = await apiGet('/api/runs');
+    const fetched = (res.runs ?? []) as Run[];
+    if (running.value && runId.value && !fetched.some(r => r.runId === runId.value)) {
+      const kept = runs.value.find(r => r.runId === runId.value);
+      if (kept) fetched.unshift(kept);
+    }
+    runs.value = fetched;
+  }
+
+  function openRun(runId: string) {
+    viewingRunId.value = runId;
+    activeView.value = 'panel';
+    void loadClaims();
+    if (running.value) startHealthPolling();
+  }
+
+  function closePanel() {
+    viewingRunId.value = null;
+    activeView.value = 'list';
+    selectedClaimId.value = null;
+    stopHealthPolling();
+    void loadRuns();
+  }
+
   function init() {
     void checkAuth().then(() => {
       if (authenticated.value) {
@@ -209,11 +318,12 @@ export const useFactcheckStore = defineStore('factcheck', () => {
   }
 
   return {
-    claims, claimsList, selectedClaim, selectedClaimId, running, runId,
+    claims, claimsList, selectedClaim, selectedClaimId, running, runningPipelines, runId,
     authRequired, authenticated, sseConnected, transcriptSegments, healthData,
-    pendingClaims, approvedClaims,
+    pendingClaims, approvedClaims, claimStats,
+    runs, activeView, viewingRunId, viewingRun, isViewingLiveRun,
     init, login, logout, loadClaims, loadHealth, connectSSE,
     startPipeline, stopPipeline, approveClaim, rejectClaim, triggerRender, overrideTag,
-    selectClaim,
+    selectClaim, loadRuns, openRun, closePanel,
   };
 });

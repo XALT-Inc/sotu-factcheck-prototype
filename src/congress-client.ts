@@ -1,4 +1,5 @@
 import type { CongressResult, CongressBillDetails } from './types.js';
+import { CONGRESS_NOT_APPLICABLE_SUMMARY } from './constants.js';
 import { createLogger } from './logger.js';
 
 const log = createLogger('congress-client');
@@ -120,7 +121,7 @@ export async function lookupCongressEvidence(
   if (!relevant) {
     return {
       state: 'not_applicable',
-      summary: 'No legislative keywords detected in this claim.',
+      summary: CONGRESS_NOT_APPLICABLE_SUMMARY,
       sources: [],
     };
   }

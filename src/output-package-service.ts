@@ -1,61 +1,15 @@
 import { randomUUID } from 'node:crypto';
-import type { OutputPackage, TakumiPayload, PipelineEvent } from './types.js';
-
-interface ClaimForPackage {
-  claimId: string;
-  runId?: string | null;
-  version?: number | null;
-  claim?: string | null;
-  correctedClaim?: string | null;
-  verdict?: string | null;
-  confidence?: number | null;
-  summary?: string | null;
-  chunkStartClock?: string | null;
-  sources?: Array<{
-    publisher?: string;
-    title?: string | null;
-    url?: string | null;
-    textualRating?: string | null;
-    reviewDate?: string | null;
-  }>;
-  fredEvidenceState?: string;
-  fredEvidenceSummary?: string | null;
-  fredEvidenceSources?: unknown[];
-}
-
-function buildTakumiPayload(claim: ClaimForPackage): TakumiPayload {
-  return {
-    schemaVersion: '1.0',
-    templateVersion: 'fc-lower-third-v1',
-    fields: {
-      claim: (claim.claim ?? '').slice(0, 484),
-      correctedClaim: claim.correctedClaim ? claim.correctedClaim.slice(0, 484) : null,
-      verdict: (claim.verdict ?? 'unverified') as TakumiPayload['fields']['verdict'],
-      confidence: claim.confidence ?? null,
-      summary: (claim.summary ?? '').slice(0, 484),
-      timecode: claim.chunkStartClock ?? null,
-      sources: (claim.sources ?? []).map((source) => ({
-        publisher: source.publisher ?? 'Unknown',
-        title: source.title ?? null,
-        url: source.url ?? null,
-        textualRating: source.textualRating ?? null,
-        reviewDate: source.reviewDate ?? null,
-      })),
-      economicEvidence: {
-        state: claim.fredEvidenceState ?? 'not_applicable',
-        summary: claim.fredEvidenceSummary ?? null,
-        sources: (claim.fredEvidenceSources ?? []) as TakumiPayload['fields']['economicEvidence']['sources'],
-      },
-    },
-  };
-}
+import type { OutputPackage, PipelineEvent, ClaimForOutput } from './types.js';
+import { normalizeClaimVersion, createEmitter } from './utils.js';
+import { buildTakumiPayload } from './claim-payload.js';
+import { DEFAULT_TEMPLATE_VERSION } from './constants.js';
 
 export interface OutputPackageServiceOptions {
   onEvent?: (event: PipelineEvent) => void;
 }
 
 export interface OutputPackageService {
-  queueForClaim: (claim: ClaimForPackage, context?: { runId?: string | null }) => Promise<OutputPackage>;
+  queueForClaim: (claim: ClaimForOutput, context?: { runId?: string | null }) => Promise<OutputPackage>;
   getByClaimId: (claimId: string) => OutputPackage | null;
   listByRunId: (runId?: string | null) => OutputPackage[];
   clear: () => void;
@@ -65,25 +19,16 @@ export interface OutputPackageService {
 export function createOutputPackageService(options: OutputPackageServiceOptions = {}): OutputPackageService {
   const packagesByClaim = new Map<string, OutputPackage>();
   let onEvent = options.onEvent;
+  let emit = createEmitter(onEvent);
 
-  function normalizeClaimVersion(claim: ClaimForPackage): number | null {
-    const parsed = Number.parseInt(String(claim?.version ?? ''), 10);
-    if (Number.isInteger(parsed) && parsed > 0) return parsed;
-    return null;
-  }
-
-  function emit(type: string, payload: Record<string, unknown> = {}): void {
-    onEvent?.({ type, at: new Date().toISOString(), ...payload });
-  }
-
-  function toReadyPackage(basePackage: OutputPackage, claim: ClaimForPackage): OutputPackage {
+  function toReadyPackage(basePackage: OutputPackage, claim: ClaimForOutput): OutputPackage {
     const payload = buildTakumiPayload(claim);
     return { ...basePackage, status: 'ready', payload, updatedAt: new Date().toISOString() };
   }
 
-  async function queueForClaim(claim: ClaimForPackage, context: { runId?: string | null } = {}): Promise<OutputPackage> {
+  async function queueForClaim(claim: ClaimForOutput, context: { runId?: string | null } = {}): Promise<OutputPackage> {
     const now = new Date().toISOString();
-    const claimVersion = normalizeClaimVersion(claim);
+    const claimVersion = normalizeClaimVersion(claim.version) > 0 ? normalizeClaimVersion(claim.version) : null;
     const previous = packagesByClaim.get(claim.claimId);
     const reusePackageId = previous && previous.claimVersion === claimVersion;
     const queued: OutputPackage = {
@@ -93,7 +38,7 @@ export function createOutputPackageService(options: OutputPackageServiceOptions 
       claimVersion,
       status: 'queued',
       error: null,
-      templateVersion: 'fc-lower-third-v1',
+      templateVersion: DEFAULT_TEMPLATE_VERSION,
       createdAt: previous?.createdAt ?? now,
       updatedAt: now,
       payload: reusePackageId ? previous.payload ?? null : null,
@@ -155,6 +100,7 @@ export function createOutputPackageService(options: OutputPackageServiceOptions 
 
   function setEventHandler(handler: (event: PipelineEvent) => void): void {
     onEvent = handler;
+    emit = createEmitter(onEvent);
   }
 
   return { queueForClaim, getByClaimId, listByRunId, clear, setEventHandler };

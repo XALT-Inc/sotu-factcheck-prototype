@@ -15,6 +15,7 @@ export interface PipelineEntry {
   pipeline: PipelineInstance;
   runId: string;
   overlayKey: string;
+  youtubeUrl: string | null;
   outputPackageService: OutputPackageService;
   renderService: RenderService;
   createdAt: string;
@@ -37,6 +38,9 @@ export interface PipelineRegistry {
 
   /** Look up a pipeline entry by its overlay key. */
   getByOverlayKey(overlayKey: string): PipelineEntry | undefined;
+
+  /** Look up a pipeline entry by its runId. */
+  getByRunId(runId: string): PipelineEntry | undefined;
 
   /** List all pipeline entries. */
   list(): PipelineEntry[];
@@ -91,6 +95,7 @@ export function createPipelineRegistry(options: PipelineRegistryOptions = {}): P
       pipeline,
       runId: pipeline.runId,
       overlayKey,
+      youtubeUrl: config.youtubeUrl ?? null,
       outputPackageService,
       renderService,
       createdAt: new Date().toISOString(),
@@ -132,6 +137,13 @@ export function createPipelineRegistry(options: PipelineRegistryOptions = {}): P
     return entries.get(pipelineId);
   }
 
+  function getByRunId(runId: string): PipelineEntry | undefined {
+    for (const entry of entries.values()) {
+      if (entry.runId === runId) return entry;
+    }
+    return undefined;
+  }
+
   function list(): PipelineEntry[] {
     return Array.from(entries.values());
   }
@@ -166,6 +178,7 @@ export function createPipelineRegistry(options: PipelineRegistryOptions = {}): P
     stop,
     get,
     getByOverlayKey,
+    getByRunId,
     list,
     isRunning,
     remove,

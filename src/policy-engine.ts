@@ -1,4 +1,5 @@
 import type { ClaimTypeTag, PolicyEvaluation, ApprovalBlockReason, ExportBlockReason } from './types.js';
+import { normalizeVerdict } from './utils.js';
 
 const TAG_THRESHOLDS: Record<ClaimTypeTag, number> = {
   numeric_factual: 0.6,
@@ -11,15 +12,6 @@ function normalizeTag(tag: unknown): ClaimTypeTag {
     return tag;
   }
   return 'other';
-}
-
-function ratingBucket(text: unknown = ''): string {
-  const rating = String(text ?? '').toLowerCase();
-  if (!rating) return 'unverified';
-  if (rating.includes('false') || rating.includes('incorrect') || rating.includes('pants on fire')) return 'false';
-  if (rating.includes('misleading') || rating.includes('mixed') || rating.includes('partly false') || rating.includes('half true') || rating.includes('mostly false')) return 'misleading';
-  if (rating.includes('true') || rating.includes('correct') || rating.includes('mostly true')) return 'true';
-  return 'unverified';
 }
 
 interface SourceLike {
@@ -42,7 +34,7 @@ function countIndependentSources(sources: SourceLike[] = []): number {
 function hasConflictingEvidence(sources: SourceLike[] = []): boolean {
   const verdicts = new Set<string>();
   for (const source of sources) {
-    const bucket = ratingBucket(source?.textualRating);
+    const bucket = normalizeVerdict(String(source?.textualRating ?? ''));
     if (bucket !== 'unverified') verdicts.add(bucket);
   }
   return verdicts.size > 1;

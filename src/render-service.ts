@@ -2,37 +2,17 @@ import { randomUUID } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import type { RenderJob, RenderServiceOptions, PipelineEvent } from './types.js';
-import { buildFactcheckGraphic, type ClaimRenderData } from './graphic-template.js';
+import type { RenderJob, RenderServiceOptions, PipelineEvent, ClaimForOutput } from './types.js';
+import { buildFactcheckGraphic, VERDICT_STYLES } from './graphic-template.js';
+import { normalizeClaimVersion, createEmitter } from './utils.js';
+import { claimToRenderData, buildDefaultRenderPayload } from './claim-payload.js';
+import { RENDER_JOB_TTL_MS, RENDER_CLEANUP_INTERVAL_MS, CLAIM_TEXT_LIMIT, DEFAULT_TEMPLATE_VERSION } from './constants.js';
 import { createLogger } from './logger.js';
 
 const log = createLogger('render-service');
 
-const RENDER_JOB_TTL_MS = 2 * 60 * 60 * 1000; // 2 hours
-const CLEANUP_INTERVAL_MS = 5 * 60 * 1000; // 5 minutes
-
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
-interface ClaimForRender {
-  claimId: string;
-  runId?: string | null;
-  version?: number | null;
-  claim?: string | null;
-  correctedClaim?: string | null;
-  verdict?: string | null;
-  confidence?: number | null;
-  summary?: string | null;
-  chunkStartClock?: string | null;
-  sources?: Array<{
-    publisher?: string;
-    title?: string | null;
-    url?: string | null;
-    textualRating?: string | null;
-  }>;
-  renderTemplateId?: string;
-  renderPayload?: Record<string, unknown> | null;
 }
 
 // ── Satori font loading ────────────────────────────────────────────────────
@@ -70,22 +50,7 @@ async function loadSatoriDeps(): Promise<boolean> {
   }
 }
 
-function claimToRenderData(claim: ClaimForRender): ClaimRenderData {
-  return {
-    claim: String(claim.claim ?? '').slice(0, 484),
-    correctedClaim: claim.correctedClaim ? String(claim.correctedClaim).slice(0, 484) : null,
-    verdict: String(claim.verdict ?? 'unverified'),
-    confidence: typeof claim.confidence === 'number' ? claim.confidence : null,
-    summary: String(claim.summary ?? '').slice(0, 484),
-    timecode: claim.chunkStartClock ?? null,
-    sources: (claim.sources ?? []).slice(0, 3).map((s) => ({
-      publisher: s.publisher ?? 'Unknown',
-      textualRating: s.textualRating ?? null,
-    })),
-  };
-}
-
-async function renderWithSatori(claim: ClaimForRender): Promise<string> {
+async function renderWithSatori(claim: ClaimForOutput): Promise<string> {
   const ready = await loadSatoriDeps();
   if (!ready || !satoriModule || !resvgModule || !fontData || fontData.byteLength === 0) {
     throw new Error('Satori rendering not available — font loading failed');
@@ -107,19 +72,13 @@ async function renderWithSatori(claim: ClaimForRender): Promise<string> {
 }
 
 // Keep SVG fallback for when satori is unavailable
-function localFallbackSvgArtifact(claim: ClaimForRender): string {
+function localFallbackSvgArtifact(claim: ClaimForOutput): string {
   const verdict = String(claim.verdict ?? 'unverified').toLowerCase();
-  const claimText = String(claim.claim ?? '').slice(0, 484);
+  const claimText = String(claim.claim ?? '').slice(0, CLAIM_TEXT_LIMIT);
   const escaped = (value: string) =>
     value.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
 
-  const verdictColors: Record<string, { bg: string; text: string; label: string }> = {
-    true: { bg: '#166534', text: '#4ade80', label: 'TRUE' },
-    false: { bg: '#991b1b', text: '#f87171', label: 'FALSE' },
-    misleading: { bg: '#92400e', text: '#fbbf24', label: 'MISLEADING' },
-    unverified: { bg: '#c2410c', text: '#fb923c', label: 'UNSUPPORTED' },
-  };
-  const vc = verdictColors[verdict] || verdictColors.unverified;
+  const vc = VERDICT_STYLES[verdict] || VERDICT_STYLES.unverified;
 
   const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="1920" height="1080">
   <rect width="100%" height="100%" fill="#0f172a"/>
@@ -131,37 +90,15 @@ function localFallbackSvgArtifact(claim: ClaimForRender): string {
   return `data:image/svg+xml;base64,${Buffer.from(svg).toString('base64')}`;
 }
 
-function defaultRenderPayload(claim: ClaimForRender): Record<string, unknown> {
-  return {
-    claim: (claim.claim ?? '').slice(0, 484),
-    correctedClaim: claim.correctedClaim ? claim.correctedClaim.slice(0, 484) : null,
-    verdict: claim.verdict ?? 'unverified',
-    confidence: claim.confidence ?? null,
-    summary: (claim.summary ?? '').slice(0, 484),
-    timecode: claim.chunkStartClock ?? null,
-    sources: (claim.sources ?? []).slice(0, 3).map((source) => ({
-      publisher: source.publisher ?? 'Unknown',
-      title: source.title ?? null,
-      url: source.url ?? null,
-      textualRating: source.textualRating ?? null,
-    })),
-  };
-}
-
-function normalizeClaimVersion(claim: ClaimForRender): number {
-  const parsed = Number.parseInt(String(claim?.version ?? 1), 10);
-  return Number.isInteger(parsed) && parsed > 0 ? parsed : 1;
-}
-
-function buildIdempotencyKey(claim: ClaimForRender): string {
+function buildIdempotencyKey(claim: ClaimForOutput): string {
   const claimId = String(claim?.claimId ?? '').trim() || 'claim-unknown';
-  const version = normalizeClaimVersion(claim);
-  const templateId = String(claim?.renderTemplateId ?? 'fc-lower-third-v1').trim();
+  const version = normalizeClaimVersion(claim.version);
+  const templateId = String(claim?.renderTemplateId ?? DEFAULT_TEMPLATE_VERSION).trim();
   return `${claimId}:${version}:${templateId}`;
 }
 
 async function callTakumiRenderer(
-  claim: ClaimForRender,
+  claim: ClaimForOutput,
   options: { takumiRenderUrl: string; timeoutMs: number }
 ): Promise<{ artifactUrl: string; rendererMode: string }> {
   const endpoint = String(options.takumiRenderUrl ?? '').trim();
@@ -186,8 +123,8 @@ async function callTakumiRenderer(
       body: JSON.stringify({
         claimId: claim.claimId,
         runId: claim.runId,
-        templateId: claim.renderTemplateId ?? 'fc-lower-third-v1',
-        payload: claim.renderPayload ?? defaultRenderPayload(claim),
+        templateId: claim.renderTemplateId ?? DEFAULT_TEMPLATE_VERSION,
+        payload: claim.renderPayload ?? buildDefaultRenderPayload(claim),
       }),
       signal: controller.signal,
     });
@@ -221,7 +158,7 @@ async function callTakumiRenderer(
 }
 
 export interface RenderService {
-  queueRender: (claim: ClaimForRender, context?: Record<string, unknown>) => Promise<RenderJob>;
+  queueRender: (claim: ClaimForOutput, context?: Record<string, unknown>) => Promise<RenderJob>;
   getByClaimId: (claimId: string) => RenderJob | null;
   clear: () => void;
   setEventHandler: (handler: (event: PipelineEvent) => void) => void;
@@ -255,15 +192,13 @@ export function createRenderService(options: RenderServiceOptions = {}): RenderS
           if (job.idempotencyKey) jobsByIdempotencyKey.delete(job.idempotencyKey);
         }
       }
-    }, CLEANUP_INTERVAL_MS);
+    }, RENDER_CLEANUP_INTERVAL_MS);
     if (typeof cleanupTimer.unref === 'function') cleanupTimer.unref();
   }
 
   startCleanup();
 
-  function emit(type: string, payload: Record<string, unknown> = {}): void {
-    onEvent?.({ type, at: new Date().toISOString(), ...payload });
-  }
+  let emit = createEmitter(onEvent);
 
   function persistJob(job: RenderJob): void {
     onJobUpdate?.(job);
@@ -291,7 +226,7 @@ export function createRenderService(options: RenderServiceOptions = {}): RenderS
       if (!active || !latestForClaimNow || latestForClaimNow.renderJobId !== renderJobId || active.claimId !== claimId) return;
 
       try {
-        const result = await callTakumiRenderer(active.claim as unknown as ClaimForRender, { takumiRenderUrl, timeoutMs });
+        const result = await callTakumiRenderer(active.claim as unknown as ClaimForOutput, { takumiRenderUrl, timeoutMs });
         const latest = jobsByRenderJobId.get(renderJobId);
         const latestClaim = jobsByClaimId.get(claimId);
         if (!latest || !latestClaim || latestClaim.renderJobId !== renderJobId || latest.claimId !== claimId) return;
@@ -334,13 +269,13 @@ export function createRenderService(options: RenderServiceOptions = {}): RenderS
     }
   }
 
-  async function queueRender(claim: ClaimForRender, context: Record<string, unknown> = {}): Promise<RenderJob> {
+  async function queueRender(claim: ClaimForOutput, context: Record<string, unknown> = {}): Promise<RenderJob> {
     const normalizedClaim = {
       ...claim,
-      renderTemplateId: claim.renderTemplateId ?? 'fc-lower-third-v1',
-      renderPayload: claim.renderPayload ?? defaultRenderPayload(claim),
+      renderTemplateId: claim.renderTemplateId ?? DEFAULT_TEMPLATE_VERSION,
+      renderPayload: claim.renderPayload ?? buildDefaultRenderPayload(claim),
     };
-    const claimVersion = normalizeClaimVersion(normalizedClaim);
+    const claimVersion = normalizeClaimVersion(normalizedClaim.version);
     const force = Boolean(context.force);
     const baseIdempotencyKey =
       typeof context.idempotencyKey === 'string' && (context.idempotencyKey as string).trim()
@@ -411,6 +346,7 @@ export function createRenderService(options: RenderServiceOptions = {}): RenderS
 
   function setEventHandler(handler: (event: PipelineEvent) => void): void {
     onEvent = handler;
+    emit = createEmitter(onEvent);
   }
 
   function setJobUpdateHandler(handler: (job: RenderJob) => void): void {
